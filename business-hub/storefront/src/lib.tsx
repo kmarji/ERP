@@ -47,7 +47,7 @@ type Lang = 'en' | 'ar';
 const AR: Record<string, string> = {
   'Order online': 'اطلب أونلاين', 'Choose a branch': 'اختر الفرع', Pickup: 'استلام', Delivery: 'توصيل', 'Not accepting orders right now': 'لا يستقبل الطلبات حالياً',
   'Delivery fee': 'رسوم التوصيل', 'Minimum order': 'الحد الأدنى للطلب', 'Ready in about': 'جاهز خلال حوالي', min: 'دقيقة', All: 'الكل', Add: 'أضف', 'Add to cart': 'أضف إلى السلة',
-  Required: 'مطلوب', 'View cart': 'عرض السلة', Cart: 'السلة', 'Your cart is empty': 'سلتك فارغة', Subtotal: 'المجموع', Checkout: 'إتمام الطلب', Close: 'إغلاق', Back: 'رجوع',
+  Required: 'مطلوب', 'View cart': 'عرض السلة', Cart: 'السلة', 'Your cart is empty': 'سلتك فارغة', Subtotal: 'المجموع', 'Includes tax': 'شامل الضريبة', Checkout: 'إتمام الطلب', Close: 'إغلاق', Back: 'رجوع',
   Name: 'الاسم', Phone: 'الهاتف', Email: 'البريد الإلكتروني', Area: 'المنطقة', Address: 'العنوان', Notes: 'ملاحظات', 'Schedule for later': 'جدولة لوقت لاحق', Payment: 'الدفع',
   'Cash on delivery / at pickup': 'نقداً عند التسليم / الاستلام', 'Card online': 'بطاقة أونلاين', 'Place order': 'أرسل الطلب', Total: 'الإجمالي', Select: 'اختر',
   'Save my details for next time': 'احفظ بياناتي للمرة القادمة', 'Order received': 'تم استلام طلبك', 'Tracking code': 'رمز التتبع', Items: 'الأصناف', 'Promised for': 'الموعد المتوقع',
@@ -86,6 +86,7 @@ export interface CartLine {
   modifierIds: string[];
   modifierNames: string[];
   unitPrice: number; // tax-inclusive, includes variant and modifiers
+  taxRate?: number; // for showing the tax inside the price
   qty: number;
 }
 
@@ -113,7 +114,8 @@ export function useCart(tenant: string, branchId: string) {
   const setQty = (key: string, qty: number) => save(qty < 1 ? read().filter((x) => x.key !== key) : read().map((x) => (x.key === key ? { ...x, qty: Math.min(50, qty) } : x)));
   const clear = () => save([]);
   const subtotal = lines.reduce((s, l) => s + l.unitPrice * l.qty, 0);
-  return { lines, add, setQty, clear, subtotal, count: lines.reduce((s, l) => s + l.qty, 0) };
+  const tax = lines.reduce((s, l) => s + (l.unitPrice * l.qty * (l.taxRate ?? 0)) / (1 + (l.taxRate ?? 0)), 0);
+  return { lines, add, setQty, clear, subtotal, tax, count: lines.reduce((s, l) => s + l.qty, 0) };
 }
 
 export const recentCodes = {

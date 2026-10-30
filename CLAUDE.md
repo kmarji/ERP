@@ -26,4 +26,5 @@ npm test                                                    # unit
 npx jest --config ./test/jest-e2e.json --forceExit          # e2e (needs docker postgres + redis); hangs without --forceExit
 npm run typecheck && npm run lint:schema
 ```
+E2E shares Redis with the docker backend, whose queue worker steals test jobs (marketplace tests time out): `docker compose stop backend` before running e2e.
 Do not `pkill -f "jest --config"` (kills the shell). In supertest, compute values before building the request; never nest requests inside `.send(await ...)`.

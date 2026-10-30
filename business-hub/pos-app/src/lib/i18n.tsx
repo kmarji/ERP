@@ -19,6 +19,7 @@ const ar: Record<string, string> = {
   Total: 'المجموع',
   Subtotal: 'المجموع الفرعي',
   Discount: 'خصم',
+  'Includes tax': 'شامل الضريبة',
   Tax: 'الضريبة',
   Cash: 'نقدي',
   Card: 'بطاقة',

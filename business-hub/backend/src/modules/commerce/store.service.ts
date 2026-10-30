@@ -82,7 +82,7 @@ export class StoreService {
         currency: 'JOD',
         taxInclusive: true,
         categories: bundle.categories,
-        items: bundle.items.filter((i: any) => i.available && !i.sku.startsWith('SVC-')).map((i: any) => ({ id: i.id, name: i.name, nameAr: i.nameAr, categoryId: i.categoryId, price: i.price, variants: i.variants, modifierGroups: i.modifierGroups, isCombo: i.isCombo })),
+        items: bundle.items.filter((i: any) => i.available && !i.sku.startsWith('SVC-')).map((i: any) => ({ id: i.id, name: i.name, nameAr: i.nameAr, categoryId: i.categoryId, price: i.price, taxRate: i.taxRate, variants: i.variants, modifierGroups: i.modifierGroups, isCombo: i.isCombo })),
       };
     });
   }

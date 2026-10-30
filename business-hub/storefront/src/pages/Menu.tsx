@@ -6,7 +6,7 @@ import type { BranchInfo } from './Branches';
 interface Modifier { id: string; name: string; priceDelta: string }
 interface Group { id: string; name: string; minSelect: number; maxSelect: number; modifiers: Modifier[] }
 interface Variant { id: string; name: string; nameAr: string | null; priceDelta: string }
-interface Item { id: string; name: string; nameAr: string | null; categoryId: string | null; price: string; variants: Variant[]; modifierGroups: Group[] }
+interface Item { id: string; name: string; nameAr: string | null; categoryId: string | null; price: string; taxRate?: string; variants: Variant[]; modifierGroups: Group[] }
 interface MenuData { categories: { id: string; name: string; nameAr: string | null }[]; items: Item[] }
 
 export default function Menu() {
@@ -84,6 +84,7 @@ export default function Menu() {
             ))}
           </ul>
           <div className="mt-3 flex justify-between font-semibold"><span>{t('Subtotal')}</span><span>{money(cart.subtotal)}</span></div>
+          {cart.tax > 0 && <div className="flex justify-between text-sm text-slate-600"><span>{t('Includes tax')}</span><span>{money(cart.tax)}</span></div>}
           {cart.subtotal < min && cart.lines.length > 0 && <p role="alert" className="mt-2 rounded bg-amber-100 p-2 text-sm text-amber-900">{t('Minimum order')}: {money(min)}</p>}
           <button disabled={cart.lines.length === 0 || cart.subtotal < min} onClick={() => nav(`/${tenant}/b/${branchId}/checkout`)} className="mt-4 w-full rounded-xl bg-brand-700 py-3 font-medium text-white disabled:bg-slate-400">{t('Checkout')}</button>
         </Dialog>
@@ -162,7 +163,7 @@ function ItemSheet({ item, onClose, onAdd }: { item: Item; onClose: () => void; 
       </div>
       <button
         disabled={!valid}
-        onClick={() => onAdd({ menuItemId: item.id, name: item.name, nameAr: item.nameAr, variantId, variantName: variant?.name, modifierIds: picked.map((m) => m.id), modifierNames: picked.map((m) => m.name), unitPrice: unit, qty })}
+        onClick={() => onAdd({ menuItemId: item.id, name: item.name, nameAr: item.nameAr, variantId, variantName: variant?.name, modifierIds: picked.map((m) => m.id), modifierNames: picked.map((m) => m.name), unitPrice: unit, taxRate: Number(item.taxRate ?? 0), qty })}
         className="w-full rounded-xl bg-brand-700 py-3 font-medium text-white disabled:bg-slate-400"
       >
         {t('Add to cart')} · {money(unit * qty)}

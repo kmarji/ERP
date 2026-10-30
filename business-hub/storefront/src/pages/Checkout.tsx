@@ -149,6 +149,7 @@ export default function Checkout() {
         <div className="flex justify-between"><span>{t('Subtotal')}</span><span>{money(cart.subtotal)}</span></div>
         {fee > 0 && <div className="flex justify-between"><span>{t('Delivery fee')}</span><span>{money(fee)}</span></div>}
         <div className="flex justify-between text-base font-semibold"><span>{t('Total')}</span><span>{money(total)}</span></div>
+        {cart.tax > 0 && <div className="flex justify-between text-xs text-slate-600"><span>{t('Includes tax')} ({t('Subtotal').toLowerCase()})</span><span>{money(cart.tax)}</span></div>}
         <ul className="pt-1 text-xs text-slate-600">{cart.lines.map((l) => <li key={l.key}>{l.qty}× {pick(l.name, l.nameAr)}</li>)}</ul>
       </div>
 

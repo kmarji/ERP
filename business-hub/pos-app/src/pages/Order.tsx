@@ -211,6 +211,7 @@ export default function OrderPage() {
         <div className="my-2 space-y-1 border-t pt-2 text-lg">
           {o && Number(o.discountTotal) > 0 && <div className="flex justify-between text-sm text-emerald-700"><span>{t('Discount')}</span><span>-{fmt(o.discountTotal)}</span></div>}
           <div className="flex justify-between text-2xl font-bold"><span>{t('Total')}</span><span>{fmt(num(o?.total) + cartTotal)}</span></div>
+          <div className="flex justify-between text-sm text-slate-500"><span>{t('Includes tax')}</span><span>{fmt(num(o?.taxTotal) + cart.reduce((s, l) => s + (l.unitPrice * l.qty * l.taxRate) / (1 + l.taxRate), 0))}</span></div>
         </div>
         {offline ? (
           <Btn disabled={!cart.length} onClick={() => setDialog('cash')}>{t('Cash')} - {t('Pay')}</Btn>

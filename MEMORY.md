@@ -28,6 +28,7 @@ Source of truth for scope: `Business_Hub_Technical_Product_Brief_v3.docx.pdf`. C
 - `migrate dev` may fail non-interactively on unique-constraint changes: `migrate diff --script` into a migration folder + `migrate deploy`.
 - New policies/limits: edit `policy-engine/defaults.ts`, run `npm run defaults:sync`; existing tenants keep old limits (defaults only insert missing).
 - Event emitter maxListeners set to 50 (many `approval.decided` listeners).
+- Running e2e while the docker backend is up makes M5 tests time out (shared Redis queue): stop the backend container first.
 - Backend image keeps devDependencies because `prisma migrate deploy` needs the CLI.
 
 ## Open items

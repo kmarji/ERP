@@ -67,7 +67,7 @@ export default function Pay() {
       <section className="flex-1 space-y-3 rounded-2xl bg-white p-4">
         <div className="text-lg">{o.number}</div>
         <div className="text-4xl font-bold">{t('Due')}: {fmt(due)}</div>
-        <div className="text-slate-500">{t('Total')} {fmt(o.total)} - paid {fmt(paid)}</div>
+        <div className="text-slate-500">{t('Total')} {fmt(o.total)} ({t('Includes tax')} {fmt(o.taxTotal)}) - paid {fmt(paid)}</div>
         {o.tenders.filter((x: any) => x.status !== 'VOIDED').map((x: any) => <div key={x.id} className={`flex justify-between rounded-xl px-3 py-2 ${x.status === 'FAILED' ? 'bg-red-50 text-red-700' : 'bg-slate-50'}`}><span>{x.method} {x.reference ?? ''}</span><span>{fmt(x.amount)} {x.status}</span></div>)}
         <Btn className="w-full" disabled={busy || due > 0.0005} onClick={() => void run(async () => { await api(`/pos/orders/${id}/complete`, { method: 'POST', body: {} }); })}>{t('Complete')}</Btn>
       </section>
