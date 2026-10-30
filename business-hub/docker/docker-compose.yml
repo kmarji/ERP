@@ -1,0 +1,66 @@
+name: business-hub
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: hub
+      POSTGRES_PASSWORD: hub
+      POSTGRES_DB: business_hub
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hub -d business_hub"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build: ../backend
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    environment:
+      DATABASE_URL: postgresql://hub:hub@postgres:5432/business_hub
+      REDIS_HOST: redis
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+      BOOTSTRAP_TOKEN: ${BOOTSTRAP_TOKEN:?set BOOTSTRAP_TOKEN}
+      DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:?set DATA_ENCRYPTION_KEY}
+      INTEGRATION_MODE: stub
+      STORAGE_DIR: /data/storage
+      CORS_ORIGIN: http://localhost:8080,http://localhost:8081,http://localhost:8082,http://localhost:8083,https://localhost,capacitor://localhost
+    ports: ["3000:3000"]
+    volumes: [storage:/data/storage]
+
+  # Browser-facing apps; API_URL is baked in at build time and must be reachable from the user's browser.
+  backoffice: &web
+    build: { context: .., dockerfile: docker/web.Dockerfile, args: { APP: frontend } }
+    ports: ["8080:80"]
+  pos:
+    <<: *web
+    build: { context: .., dockerfile: docker/web.Dockerfile, args: { APP: pos-app } }
+    ports: ["8081:80"]
+  storefront:
+    <<: *web
+    build: { context: .., dockerfile: docker/web.Dockerfile, args: { APP: storefront } }
+    ports: ["8082:80"]
+  careers:
+    <<: *web
+    build: { context: .., dockerfile: docker/web.Dockerfile, args: { APP: careers } }
+    ports: ["8083:80"]
+
+volumes:
+  pgdata:
+  storage:

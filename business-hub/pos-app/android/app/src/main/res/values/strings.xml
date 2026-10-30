@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Business Hub POS</string>
+    <string name="title_activity_main">Business Hub POS</string>
+    <string name="package_name">jo.businesshub.pos</string>
+    <string name="custom_url_scheme">jo.businesshub.pos</string>
+</resources>

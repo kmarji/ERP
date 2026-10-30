@@ -1,0 +1,2594 @@
+// Business Hub schema. Domain sections are added per milestone.
+// Convention: every model except Tenant carries tenantId (auto-scoped by the tenancy extension).
+// Money is Decimal(18,3) (JOD has 3 decimal places).
+// Models tagged "// @businessEvent" must carry tenantId, idempotencyKey, correlationId, createdAt,
+// createdBy and @@unique([tenantId, idempotencyKey]); enforced by prisma/lint-schema.ts.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================ CORE: organization
+
+model Tenant {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  active    Boolean  @default(true)
+  // Tenant-level switches, e.g. {"einvoicing": {"enabled": true}}
+  settings  Json     @default("{}")
+  createdAt DateTime @default(now())
+
+  legalEntities LegalEntity[]
+  branches      Branch[]
+  users         User[]
+}
+
+model LegalEntity {
+  id        String   @id @default(uuid())
+  tenantId  String
+  name      String
+  taxNumber String?
+  currency  String   @default("JOD")
+  createdAt DateTime @default(now())
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id])
+  branches Branch[]
+
+  @@index([tenantId])
+}
+
+model Branch {
+  id            String   @id @default(uuid())
+  tenantId      String
+  legalEntityId String
+  code          String
+  name          String
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+
+  tenant         Tenant          @relation(fields: [tenantId], references: [id])
+  legalEntity    LegalEntity     @relation(fields: [legalEntityId], references: [id])
+  costCenters    CostCenter[]
+  stockLocations StockLocation[]
+
+  @@unique([tenantId, code])
+  @@index([legalEntityId])
+}
+
+model CostCenter {
+  id       String  @id @default(uuid())
+  tenantId String
+  branchId String?
+  code     String
+  name     String
+
+  branch Branch? @relation(fields: [branchId], references: [id])
+
+  @@unique([tenantId, code])
+}
+
+model StockLocation {
+  id              String  @id @default(uuid())
+  tenantId        String
+  branchId        String
+  code            String
+  name            String
+  // Sales consume stock from the branch's sales location (falls back to its first location by code).
+  isSalesLocation Boolean @default(false)
+
+  branch Branch @relation(fields: [branchId], references: [id])
+
+  @@unique([tenantId, code])
+}
+
+// ============================================================ CORE: identity & policy
+
+model User {
+  id           String   @id @default(uuid())
+  tenantId     String
+  email        String
+  name         String
+  passwordHash String
+  active       Boolean  @default(true)
+  isSystem     Boolean  @default(false) // machine identity for automation
+  createdAt    DateTime @default(now())
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id])
+  roles       UserRole[]
+  delegations Delegation[] @relation("DelegateTo")
+
+  @@unique([tenantId, email])
+}
+
+// Role keys: OWNER, FINANCE, PROCUREMENT, BRANCH_MANAGER, CASHIER, KITCHEN, HR, EMPLOYEE, SYSTEM
+model Role {
+  id       String @id @default(uuid())
+  tenantId String
+  key      String
+  name     String
+  rank     Int    @default(0) // higher = more authority; used for lowest-authorized routing
+
+  users UserRole[]
+
+  @@unique([tenantId, key])
+}
+
+// Scope: both null = HQ-wide; legalEntityId only = entity-wide; branchId = branch-limited.
+model UserRole {
+  id            String  @id @default(uuid())
+  tenantId      String
+  userId        String
+  roleId        String
+  legalEntityId String?
+  branchId      String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id])
+
+  @@index([tenantId, userId])
+}
+
+// Temporary delegated approval authority.
+model Delegation {
+  id         String    @id @default(uuid())
+  tenantId   String
+  fromUserId String
+  toUserId   String
+  roleKey    String
+  branchId   String?
+  startsAt   DateTime
+  endsAt     DateTime
+  revokedAt  DateTime?
+
+  to User @relation("DelegateTo", fields: [toUserId], references: [id])
+
+  @@index([tenantId, toUserId])
+}
+
+enum RiskTier {
+  LOW
+  MEDIUM
+  HIGH
+  REGULATED
+}
+
+// Versioned automation policy. rules shape: { conditions: {...}, tier: RiskTier }.
+model Policy {
+  id        String   @id @default(uuid())
+  tenantId  String
+  key       String // e.g. purchase_order.approve
+  version   Int      @default(1)
+  active    Boolean  @default(true)
+  riskTier  RiskTier @default(MEDIUM)
+  rules     Json     @default("{}")
+  createdBy String?
+  createdAt DateTime @default(now())
+
+  @@unique([tenantId, key, version])
+  @@index([tenantId, key, active])
+}
+
+// Amount ceiling a role may approve for a policy key, optionally scoped.
+model ApprovalLimit {
+  id            String  @id @default(uuid())
+  tenantId      String
+  policyKey     String
+  roleKey       String
+  maxAmount     Decimal @db.Decimal(18, 3)
+  legalEntityId String?
+  branchId      String?
+  category      String?
+
+  @@index([tenantId, policyKey])
+}
+
+// ============================================================ CORE: workflow engine
+
+model WorkflowInstance {
+  id            String   @id @default(uuid())
+  tenantId      String
+  definitionKey String // e.g. WF-01
+  state         String
+  subjectType   String
+  subjectId     String
+  riskTier      RiskTier @default(LOW)
+  correlationId String
+  closed        Boolean  @default(false)
+  history       Json     @default("[]") // [{from,to,event,at,actor}]
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tasks      Task[]
+  exceptions Exception[]
+
+  @@unique([tenantId, definitionKey, subjectType, subjectId])
+  @@index([tenantId, definitionKey, state])
+}
+
+enum TaskStatus {
+  OPEN
+  DONE
+  CANCELLED
+}
+
+model Task {
+  id             String     @id @default(uuid())
+  tenantId       String
+  workflowId     String?
+  title          String
+  assigneeRole   String?
+  assigneeUserId String?
+  branchId       String?
+  status         TaskStatus @default(OPEN)
+  dueAt          DateTime?
+  createdAt      DateTime   @default(now())
+
+  workflow WorkflowInstance? @relation(fields: [workflowId], references: [id])
+
+  @@index([tenantId, status, assigneeRole])
+}
+
+// Lifecycle (brief 12.1): DETECTED > CLASSIFIED > ASSIGNED > NOTIFIED > RESOLVED/APPROVED/REJECTED
+// > EXECUTED/RETRIED > VERIFIED > ARCHIVED
+enum ExceptionStatus {
+  DETECTED
+  CLASSIFIED
+  ASSIGNED
+  NOTIFIED
+  RESOLVED
+  APPROVED
+  REJECTED
+  EXECUTED
+  RETRIED
+  VERIFIED
+  ARCHIVED
+}
+
+model Exception {
+  id               String          @id @default(uuid())
+  tenantId         String
+  workflowId       String?
+  code             String // e.g. PUR_PRICE_VARIANCE
+  reason           String
+  evidence         Json            @default("{}")
+  impact           String?
+  amount           Decimal?        @db.Decimal(18, 3)
+  riskTier         RiskTier        @default(MEDIUM)
+  status           ExceptionStatus @default(DETECTED)
+  ownerRole        String?
+  ownerUserId      String?
+  branchId         String?
+  deadline         DateTime?
+  availableActions Json            @default("[]")
+  escalationRoute  Json            @default("[]") // ordered role keys
+  ownerEscalated   Boolean         @default(false) // true only if beyond delegated authority
+  resolution       String?
+  history          Json            @default("[]")
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  workflow  WorkflowInstance? @relation(fields: [workflowId], references: [id])
+  approvals Approval[]
+
+  @@index([tenantId, status, ownerRole])
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model Approval {
+  id             String         @id @default(uuid())
+  tenantId       String
+  exceptionId    String?
+  subjectType    String
+  subjectId      String
+  action         String // what executes on approval, e.g. purchase_order.issue
+  amount         Decimal?       @db.Decimal(18, 3)
+  requestedBy    String
+  approverRole   String
+  approverUserId String?
+  branchId       String?
+  status         ApprovalStatus @default(PENDING)
+  comment        String?
+  decidedAt      DateTime?
+  createdAt      DateTime       @default(now())
+
+  exception Exception? @relation(fields: [exceptionId], references: [id])
+
+  @@index([tenantId, status, approverRole])
+}
+
+model Notification {
+  id        String    @id @default(uuid())
+  tenantId  String
+  userId    String?
+  roleKey   String?
+  title     String
+  body      String?
+  channel   String    @default("IN_APP")
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([tenantId, userId, readAt])
+}
+
+// ============================================================ CORE: documents, events, integrations, audit
+
+model EvidenceDocument {
+  id          String   @id @default(uuid())
+  tenantId    String
+  storageKey  String
+  filename    String
+  mimeType    String
+  sizeBytes   Int
+  sha256      String
+  subjectType String?
+  subjectId   String?
+  extracted   Json? // OCR/QR fields with provenance
+  confidence  Decimal? @db.Decimal(5, 4)
+  createdBy   String?
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId, subjectType, subjectId])
+  @@index([tenantId, sha256])
+}
+
+enum EventStatus {
+  RECORDED
+  PROCESSED
+  FAILED
+}
+
+// Source-of-truth business event (SaleFinalized, GoodsReceiptConfirmed, PayrollFinalized...).
+// @businessEvent
+model BusinessEvent {
+  id             String      @id @default(uuid())
+  tenantId       String
+  type           String
+  aggregateType  String
+  aggregateId    String
+  payload        Json
+  status         EventStatus @default(RECORDED)
+  idempotencyKey String
+  correlationId  String
+  createdBy      String?
+  createdAt      DateTime    @default(now())
+
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, type, status])
+}
+
+enum JobStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  DEAD
+}
+
+// @businessEvent
+model IntegrationJob {
+  id             String    @id @default(uuid())
+  tenantId       String
+  adapter        String
+  operation      String
+  payload        Json
+  result         Json?
+  status         JobStatus @default(PENDING)
+  attempts       Int       @default(0)
+  maxAttempts    Int       @default(5)
+  lastError      String?
+  nextRunAt      DateTime?
+  idempotencyKey String
+  correlationId  String
+  createdBy      String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, status])
+}
+
+// Append-only. Never updated or deleted.
+model AuditEvent {
+  id               String   @id @default(uuid())
+  tenantId         String
+  actorId          String?
+  actorType        String   @default("USER") // USER | SYSTEM
+  action           String
+  entityType       String
+  entityId         String?
+  policyVersion    Int?
+  before           Json?
+  after            Json?
+  outcome          String   @default("SUCCESS")
+  externalResponse Json?
+  correlationId    String?
+  createdAt        DateTime @default(now())
+
+  @@index([tenantId, entityType, entityId])
+  @@index([tenantId, createdAt])
+}
+
+// HTTP-level Idempotency-Key cache.
+model IdempotencyRequest {
+  id             String   @id @default(uuid())
+  tenantId       String
+  key            String
+  method         String
+  path           String
+  requestHash    String
+  responseStatus Int?
+  responseBody   Json?
+  createdAt      DateTime @default(now())
+
+  @@unique([tenantId, key])
+}
+
+// ============================================================ shared: document numbering
+
+model Sequence {
+  id       String @id @default(uuid())
+  tenantId String
+  key      String
+  next     Int    @default(0)
+
+  @@unique([tenantId, key])
+}
+
+// ============================================================ CATALOG
+
+enum ProductKind {
+  INGREDIENT
+  SUPPLY
+  MENU_ITEM
+}
+
+model Product {
+  id        String      @id @default(uuid())
+  tenantId  String
+  sku       String
+  name      String
+  nameAr    String?
+  kind      ProductKind @default(INGREDIENT)
+  baseUnit  String // stock is always held in this unit
+  category  String?
+  taxCodeId String?
+  active    Boolean     @default(true)
+  createdAt DateTime    @default(now())
+
+  conversions   UnitConversion[]
+  supplierItems SupplierItem[]
+  taxCode       TaxCode?         @relation(fields: [taxCodeId], references: [id])
+
+  @@unique([tenantId, sku])
+}
+
+// 1 <unit> = factorToBase <baseUnit>. The base unit itself needs no row (factor 1).
+model UnitConversion {
+  id           String  @id @default(uuid())
+  tenantId     String
+  productId    String
+  unit         String
+  factorToBase Decimal @db.Decimal(18, 6)
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, unit])
+}
+
+model Supplier {
+  id               String   @id @default(uuid())
+  tenantId         String
+  name             String
+  taxNumber        String? // government identifier used for identity checks
+  paymentTermsDays Int      @default(30)
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+
+  items SupplierItem[]
+
+  @@unique([tenantId, taxNumber])
+}
+
+// Maps a supplier's own SKU to an internal product.
+model SupplierItem {
+  id          String   @id @default(uuid())
+  tenantId    String
+  supplierId  String
+  productId   String
+  supplierSku String
+  unit        String
+  agreedPrice Decimal? @db.Decimal(18, 4)
+  preferred   Boolean  @default(false)
+
+  supplier Supplier @relation(fields: [supplierId], references: [id])
+  product  Product  @relation(fields: [productId], references: [id])
+
+  @@unique([tenantId, supplierId, supplierSku])
+}
+
+// ============================================================ PURCHASING
+
+enum PurchaseRequestStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  CONVERTED
+  REJECTED
+}
+
+model PurchaseRequest {
+  id              String                @id @default(uuid())
+  tenantId        String
+  number          String
+  branchId        String
+  stockLocationId String
+  requestedBy     String
+  status          PurchaseRequestStatus @default(DRAFT)
+  source          String                @default("MANUAL") // MANUAL | REPLENISHMENT
+  notes           String?
+  createdAt       DateTime              @default(now())
+
+  lines          PurchaseRequestLine[]
+  purchaseOrders PurchaseOrder[]
+
+  @@unique([tenantId, number])
+}
+
+model PurchaseRequestLine {
+  id           String   @id @default(uuid())
+  tenantId     String
+  requestId    String
+  productId    String
+  qty          Decimal  @db.Decimal(18, 4)
+  unit         String
+  supplierId   String?
+  estUnitPrice Decimal? @db.Decimal(18, 4)
+
+  request PurchaseRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+}
+
+enum PurchaseOrderStatus {
+  PENDING_APPROVAL
+  ISSUED
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CANCELLED
+}
+
+model PurchaseOrder {
+  id                String              @id @default(uuid())
+  tenantId          String
+  number            String
+  supplierId        String
+  legalEntityId     String
+  branchId          String
+  stockLocationId   String
+  purchaseRequestId String?
+  status            PurchaseOrderStatus @default(PENDING_APPROVAL)
+  subtotal          Decimal             @db.Decimal(18, 3)
+  taxTotal          Decimal             @db.Decimal(18, 3)
+  total             Decimal             @db.Decimal(18, 3)
+  expectedDate      DateTime?
+  issuedAt          DateTime?
+  createdBy         String
+  createdAt         DateTime            @default(now())
+
+  lines    PurchaseOrderLine[]
+  request  PurchaseRequest?    @relation(fields: [purchaseRequestId], references: [id])
+  receipts GoodsReceipt[]
+  invoices SupplierInvoice[]
+
+  @@unique([tenantId, number])
+  @@unique([tenantId, purchaseRequestId, supplierId])
+}
+
+model PurchaseOrderLine {
+  id          String  @id @default(uuid())
+  tenantId    String
+  orderId     String
+  productId   String
+  qty         Decimal @db.Decimal(18, 4)
+  unit        String
+  unitPrice   Decimal @db.Decimal(18, 4) // price per ordered unit
+  taxRate     Decimal @db.Decimal(6, 4)
+  qtyReceived Decimal @default(0) @db.Decimal(18, 4) // in ordered unit
+  lineNet     Decimal @db.Decimal(18, 3)
+
+  order PurchaseOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+}
+
+// ============================================================ RECEIVING
+
+enum InvoiceStatus {
+  CAPTURED
+  EXCEPTION
+  POSTED
+  REJECTED
+}
+
+model SupplierInvoice {
+  id                   String        @id @default(uuid())
+  tenantId             String
+  supplierId           String
+  invoiceNumber        String
+  invoiceDate          DateTime      @db.Date
+  subtotal             Decimal       @db.Decimal(18, 3)
+  taxTotal             Decimal       @db.Decimal(18, 3)
+  total                Decimal       @db.Decimal(18, 3)
+  supplierTaxNumber    String?
+  qrUuid               String? // government e-invoice identifier when present in the QR
+  qrPayload            String?
+  purchaseOrderId      String?
+  evidenceDocumentId   String?
+  extractionConfidence Decimal?      @db.Decimal(5, 4)
+  status               InvoiceStatus @default(CAPTURED)
+  findings             Json          @default("[]")
+  // Duplicate guard: set while the invoice is live, cleared on reject or finance override.
+  duplicateKey         String?
+  journalId            String?
+  createdBy            String
+  createdAt            DateTime      @default(now())
+
+  lines         SupplierInvoiceLine[]
+  purchaseOrder PurchaseOrder?        @relation(fields: [purchaseOrderId], references: [id])
+  receipts      GoodsReceipt[]
+  payable       Payable?
+
+  @@unique([tenantId, duplicateKey])
+  @@unique([tenantId, qrUuid])
+  @@index([tenantId, supplierId, invoiceNumber])
+}
+
+model SupplierInvoiceLine {
+  id          String  @id @default(uuid())
+  tenantId    String
+  invoiceId   String
+  supplierSku String?
+  description String?
+  productId   String?
+  qty         Decimal @db.Decimal(18, 4)
+  unit        String
+  unitPrice   Decimal @db.Decimal(18, 4)
+  taxRate     Decimal @db.Decimal(6, 4)
+  lineNet     Decimal @db.Decimal(18, 3)
+  lineTax     Decimal @db.Decimal(18, 3)
+
+  invoice SupplierInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+}
+
+enum ReceiptStatus {
+  PENDING_REVIEW
+  CONFIRMED
+  REJECTED
+}
+
+enum PostingStatus {
+  PENDING
+  POSTED
+  FAILED
+  NOT_REQUIRED
+}
+
+// Stock is only recognized once a receipt is CONFIRMED: an invoice alone never proves delivery.
+// @businessEvent
+model GoodsReceipt {
+  id                String        @id @default(uuid())
+  tenantId          String
+  number            String
+  purchaseOrderId   String?
+  supplierId        String
+  branchId          String
+  stockLocationId   String
+  invoiceId         String?
+  operationalStatus ReceiptStatus @default(PENDING_REVIEW)
+  postingStatus     PostingStatus @default(PENDING)
+  journalId         String?
+  receivedBy        String
+  receivedAt        DateTime      @default(now())
+  idempotencyKey    String
+  correlationId     String
+  createdBy         String
+  createdAt         DateTime      @default(now())
+
+  lines         GoodsReceiptLine[]
+  purchaseOrder PurchaseOrder?     @relation(fields: [purchaseOrderId], references: [id])
+  invoice       SupplierInvoice?   @relation(fields: [invoiceId], references: [id])
+
+  @@unique([tenantId, number])
+  @@unique([tenantId, idempotencyKey])
+}
+
+model GoodsReceiptLine {
+  id          String  @id @default(uuid())
+  tenantId    String
+  receiptId   String
+  poLineId    String?
+  productId   String
+  qtyReceived Decimal @db.Decimal(18, 4) // in the unit entered
+  unit        String
+  qtyBase     Decimal @db.Decimal(18, 4)
+  unitCost    Decimal @db.Decimal(18, 6) // per base unit
+  value       Decimal @db.Decimal(18, 3)
+
+  receipt GoodsReceipt @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+}
+
+// ============================================================ INVENTORY
+
+enum MovementType {
+  RECEIPT
+  SALE_CONSUMPTION
+  ADJUSTMENT
+  TRANSFER_OUT
+  TRANSFER_IN
+  WASTAGE
+  COUNT_ADJUSTMENT
+  RETURN_TO_SUPPLIER
+  SALE_RETURN
+}
+
+// Append-only. Quantities are signed, in the product base unit.
+// @businessEvent
+model StockMovement {
+  id             String       @id @default(uuid())
+  tenantId       String
+  productId      String
+  locationId     String
+  type           MovementType
+  qtyBase        Decimal      @db.Decimal(18, 4)
+  unitCost       Decimal      @db.Decimal(18, 6)
+  valueDelta     Decimal      @db.Decimal(18, 3)
+  sourceType     String
+  sourceId       String
+  journalId      String?
+  occurredAt     DateTime     @default(now())
+  idempotencyKey String
+  correlationId  String
+  createdBy      String
+  createdAt      DateTime     @default(now())
+
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, productId, locationId])
+  @@index([tenantId, sourceType, sourceId])
+}
+
+// Derived from movements inside the same transaction; verified by a reconciliation check.
+model StockBalance {
+  id         String   @id @default(uuid())
+  tenantId   String
+  productId  String
+  locationId String
+  qtyBase    Decimal  @default(0) @db.Decimal(18, 4)
+  value      Decimal  @default(0) @db.Decimal(18, 3)
+  avgCost    Decimal  @default(0) @db.Decimal(18, 6)
+  updatedAt  DateTime @updatedAt
+
+  @@unique([tenantId, productId, locationId])
+}
+
+// ============================================================ FINANCE
+
+enum AccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  REVENUE
+  EXPENSE
+}
+
+model ChartAccount {
+  id        String      @id @default(uuid())
+  tenantId  String
+  code      String
+  name      String
+  nameAr    String?
+  type      AccountType
+  systemKey String? // stable handle for automated postings, e.g. INVENTORY, AP
+  active    Boolean     @default(true)
+
+  lines JournalLine[]
+
+  @@unique([tenantId, code])
+  @@unique([tenantId, systemKey])
+}
+
+enum PeriodStatus {
+  OPEN
+  LOCKED
+}
+
+model FinancialPeriod {
+  id        String       @id @default(uuid())
+  tenantId  String
+  startDate DateTime     @db.Date
+  endDate   DateTime     @db.Date
+  status    PeriodStatus @default(OPEN)
+  lockedBy  String?
+  lockedAt  DateTime?
+
+  @@unique([tenantId, startDate])
+}
+
+// Append-only ledger. Corrections are new journals that reverse the original (reversalOfId).
+// @businessEvent
+model Journal {
+  id             String   @id @default(uuid())
+  tenantId       String
+  number         String
+  postingDate    DateTime @db.Date
+  memo           String?
+  sourceType     String
+  sourceId       String
+  legalEntityId  String
+  branchId       String?
+  reversalOfId   String?  @unique
+  idempotencyKey String
+  correlationId  String
+  createdBy      String
+  createdAt      DateTime @default(now())
+
+  lines      JournalLine[]
+  reversalOf Journal?      @relation("Reversal", fields: [reversalOfId], references: [id])
+  reversedBy Journal?      @relation("Reversal")
+
+  @@unique([tenantId, number])
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, sourceType, sourceId])
+  @@index([tenantId, postingDate])
+}
+
+model JournalLine {
+  id           String  @id @default(uuid())
+  tenantId     String
+  journalId    String
+  lineNo       Int
+  accountId    String
+  debit        Decimal @default(0) @db.Decimal(18, 3)
+  credit       Decimal @default(0) @db.Decimal(18, 3)
+  branchId     String?
+  costCenterId String?
+  memo         String?
+
+  journal Journal      @relation(fields: [journalId], references: [id])
+  account ChartAccount @relation(fields: [accountId], references: [id])
+
+  @@index([tenantId, accountId])
+}
+
+enum TaxDirection {
+  INPUT
+  OUTPUT
+}
+
+model TaxCode {
+  id              String  @id @default(uuid())
+  tenantId        String
+  code            String
+  name            String
+  rate            Decimal @db.Decimal(6, 4) // 0.16 = 16%
+  eligibleDefault Boolean @default(true) // input tax recoverable by default
+  notes           String?
+  active          Boolean @default(true)
+
+  products Product[]
+
+  @@unique([tenantId, code])
+}
+
+// Tax evidence captured at posting time; the tax return draft (WF-07) is built from these rows.
+model TaxLedgerEntry {
+  id            String       @id @default(uuid())
+  tenantId      String
+  direction     TaxDirection
+  taxCodeId     String?
+  taxRate       Decimal      @db.Decimal(6, 4)
+  sourceType    String
+  sourceId      String
+  documentDate  DateTime     @db.Date
+  base          Decimal      @db.Decimal(18, 3)
+  taxAmount     Decimal      @db.Decimal(18, 3)
+  eligible      Boolean      @default(true)
+  legalEntityId String
+  journalId     String?
+  createdAt     DateTime     @default(now())
+
+  @@unique([tenantId, sourceType, sourceId, taxRate, direction, eligible])
+  @@index([tenantId, direction, documentDate])
+}
+
+enum PayableStatus {
+  OPEN
+  PAYMENT_APPROVED
+  PAID
+}
+
+model Payable {
+  id               String        @id @default(uuid())
+  tenantId         String
+  supplierId       String
+  invoiceId        String        @unique
+  legalEntityId    String
+  amountDue        Decimal       @db.Decimal(18, 3)
+  dueDate          DateTime      @db.Date
+  status           PayableStatus @default(OPEN)
+  approvedBy       String?
+  paymentReference String?
+  paymentMethod    String?
+  paidAt           DateTime?
+  paymentJournalId String?
+  createdAt        DateTime      @default(now())
+
+  invoice SupplierInvoice @relation(fields: [invoiceId], references: [id])
+
+  @@index([tenantId, status, dueDate])
+}
+
+// ============================================================ INVENTORY: counts, wastage, transfers, replenishment
+
+enum CountStatus {
+  OPEN
+  PENDING_APPROVAL
+  APPLIED
+  CANCELLED
+}
+
+// Physical counts are kept separate from theoretical (sales-driven) consumption: applying one posts
+// COUNT_ADJUSTMENT movements only.
+model StockCount {
+  id          String      @id @default(uuid())
+  tenantId    String
+  number      String
+  locationId  String
+  status      CountStatus @default(OPEN)
+  createdBy   String
+  createdAt   DateTime    @default(now())
+  submittedAt DateTime?
+  appliedAt   DateTime?
+  journalId   String?
+
+  lines StockCountLine[]
+
+  @@unique([tenantId, number])
+}
+
+model StockCountLine {
+  id              String   @id @default(uuid())
+  tenantId        String
+  countId         String
+  productId       String
+  countedQtyBase  Decimal? @db.Decimal(18, 4)
+  // Filled at submit time from the live balance, so movements during the count are not mistaken for shrinkage.
+  expectedQtyBase Decimal? @db.Decimal(18, 4)
+  varianceQty     Decimal? @db.Decimal(18, 4)
+  varianceValue   Decimal? @db.Decimal(18, 3)
+
+  count StockCount @relation(fields: [countId], references: [id], onDelete: Cascade)
+
+  @@unique([countId, productId])
+}
+
+enum WastageStatus {
+  RECORDED
+  UNDER_REVIEW
+}
+
+model Wastage {
+  id         String        @id @default(uuid())
+  tenantId   String
+  locationId String
+  productId  String
+  qtyBase    Decimal       @db.Decimal(18, 4)
+  reason     String // EXPIRED | SPOILED | DAMAGED | PREP_WASTE | OTHER
+  notes      String?
+  value      Decimal       @db.Decimal(18, 3)
+  status     WastageStatus @default(RECORDED)
+  journalId  String?
+  createdBy  String
+  createdAt  DateTime      @default(now())
+
+  @@index([tenantId, createdAt])
+}
+
+model StockTransfer {
+  id             String   @id @default(uuid())
+  tenantId       String
+  number         String
+  fromLocationId String
+  toLocationId   String
+  createdBy      String
+  createdAt      DateTime @default(now())
+  journalId      String?
+
+  lines StockTransferLine[]
+
+  @@unique([tenantId, number])
+}
+
+model StockTransferLine {
+  id         String  @id @default(uuid())
+  tenantId   String
+  transferId String
+  productId  String
+  qty        Decimal @db.Decimal(18, 4)
+  unit       String
+  qtyBase    Decimal @db.Decimal(18, 4)
+  unitCost   Decimal @db.Decimal(18, 6)
+  value      Decimal @db.Decimal(18, 3)
+
+  transfer StockTransfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+}
+
+// Order-up-to (par) rule: when available stock falls to the reorder point, order back up to maxQtyBase.
+model ReplenishmentRule {
+  id           String  @id @default(uuid())
+  tenantId     String
+  productId    String
+  locationId   String
+  minQtyBase   Decimal @db.Decimal(18, 4)
+  maxQtyBase   Decimal @db.Decimal(18, 4)
+  leadTimeDays Int     @default(2)
+  supplierId   String?
+  orderUnit    String?
+  active       Boolean @default(true)
+
+  @@unique([tenantId, productId, locationId])
+}
+
+// ============================================================ MENU
+
+model MenuCategory {
+  id        String  @id @default(uuid())
+  tenantId  String
+  name      String
+  nameAr    String?
+  sortOrder Int     @default(0)
+  active    Boolean @default(true)
+
+  items MenuItem[]
+}
+
+// Per-branch kitchen/bar station. Menu items route by stationKey; stations are created on demand.
+model Station {
+  id       String  @id @default(uuid())
+  tenantId String
+  branchId String
+  key      String
+  name     String
+  active   Boolean @default(true)
+
+  tickets KitchenTicket[]
+
+  @@unique([tenantId, branchId, key])
+}
+
+// Prices are tax-inclusive consumer prices (ponytail: add a per-tenant switch if tax-exclusive pricing is needed).
+model MenuItem {
+  id            String   @id @default(uuid())
+  tenantId      String
+  sku           String
+  name          String
+  nameAr        String?
+  categoryId    String?
+  price         Decimal  @db.Decimal(18, 3)
+  taxCodeId     String?
+  stationKey    String?
+  isCombo       Boolean  @default(false)
+  active        Boolean  @default(true)
+  availableFrom String? // "HH:MM" Amman time, for scheduled menus
+  availableTo   String?
+  createdAt     DateTime @default(now())
+
+  category        MenuCategory?           @relation(fields: [categoryId], references: [id])
+  variants        MenuItemVariant[]
+  modifierGroups  MenuItemModifierGroup[]
+  components      ComboComponent[]        @relation("Combo")
+  recipes         Recipe[]
+  branchOverrides BranchMenuItem[]
+
+  @@unique([tenantId, sku])
+}
+
+model MenuItemVariant {
+  id          String  @id @default(uuid())
+  tenantId    String
+  menuItemId  String
+  name        String
+  nameAr      String?
+  priceDelta  Decimal @default(0) @db.Decimal(18, 3)
+  recipeScale Decimal @default(1) @db.Decimal(8, 4)
+
+  menuItem MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+}
+
+model ModifierGroup {
+  id        String  @id @default(uuid())
+  tenantId  String
+  name      String
+  nameAr    String?
+  minSelect Int     @default(0)
+  maxSelect Int     @default(1)
+
+  modifiers Modifier[]
+  items     MenuItemModifierGroup[]
+}
+
+model Modifier {
+  id         String  @id @default(uuid())
+  tenantId   String
+  groupId    String
+  name       String
+  nameAr     String?
+  priceDelta Decimal @default(0) @db.Decimal(18, 3)
+  active     Boolean @default(true)
+
+  group       ModifierGroup        @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  ingredients ModifierIngredient[]
+}
+
+model ModifierIngredient {
+  id         String  @id @default(uuid())
+  tenantId   String
+  modifierId String
+  productId  String
+  qtyBase    Decimal @db.Decimal(18, 4)
+
+  modifier Modifier @relation(fields: [modifierId], references: [id], onDelete: Cascade)
+}
+
+model MenuItemModifierGroup {
+  id         String @id @default(uuid())
+  tenantId   String
+  menuItemId String
+  groupId    String
+
+  menuItem MenuItem      @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  group    ModifierGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([menuItemId, groupId])
+}
+
+model ComboComponent {
+  id              String @id @default(uuid())
+  tenantId        String
+  comboItemId     String
+  componentItemId String
+  qty             Int    @default(1)
+
+  combo MenuItem @relation("Combo", fields: [comboItemId], references: [id], onDelete: Cascade)
+}
+
+// Ingredients needed for `yield` portions of an item (optionally one variant). variantKey "" = base recipe.
+model Recipe {
+  id         String  @id @default(uuid())
+  tenantId   String
+  menuItemId String
+  variantKey String  @default("")
+  yield      Decimal @default(1) @db.Decimal(10, 3)
+
+  menuItem    MenuItem           @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  ingredients RecipeIngredient[]
+
+  @@unique([menuItemId, variantKey])
+}
+
+model RecipeIngredient {
+  id        String  @id @default(uuid())
+  tenantId  String
+  recipeId  String
+  productId String
+  qtyBase   Decimal @db.Decimal(18, 4)
+
+  recipe Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+}
+
+// Branch overrides of the central catalog: price and out-of-stock control.
+model BranchMenuItem {
+  id         String   @id @default(uuid())
+  tenantId   String
+  branchId   String
+  menuItemId String
+  price      Decimal? @db.Decimal(18, 3)
+  available  Boolean  @default(true)
+
+  menuItem MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+
+  @@unique([branchId, menuItemId])
+}
+
+enum PriceChangeStatus {
+  PENDING
+  APPLIED
+  REJECTED
+}
+
+model PriceChange {
+  id          String            @id @default(uuid())
+  tenantId    String
+  menuItemId  String
+  branchId    String?
+  oldPrice    Decimal           @db.Decimal(18, 3)
+  newPrice    Decimal           @db.Decimal(18, 3)
+  pct         Decimal           @db.Decimal(10, 4)
+  status      PriceChangeStatus @default(PENDING)
+  requestedBy String
+  createdAt   DateTime          @default(now())
+}
+
+// ============================================================ FRONT OF HOUSE
+
+model FloorPlan {
+  id       String @id @default(uuid())
+  tenantId String
+  branchId String
+  name     String
+
+  tables DiningTable[]
+
+  @@unique([tenantId, branchId, name])
+}
+
+model DiningTable {
+  id          String @id @default(uuid())
+  tenantId    String
+  floorPlanId String
+  branchId    String
+  name        String
+  seats       Int    @default(4)
+
+  floorPlan FloorPlan @relation(fields: [floorPlanId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, branchId, name])
+}
+
+model Customer {
+  id               String    @id @default(uuid())
+  tenantId         String
+  name             String
+  phone            String?
+  email            String?
+  marketingConsent Boolean   @default(false)
+  consentAt        DateTime?
+  points           Int       @default(0)
+  createdAt        DateTime  @default(now())
+
+  @@unique([tenantId, phone])
+}
+
+model LoyaltyTransaction {
+  id         String   @id @default(uuid())
+  tenantId   String
+  customerId String
+  orderId    String?
+  points     Int
+  reason     String
+  createdAt  DateTime @default(now())
+
+  @@index([tenantId, customerId])
+}
+
+enum VoucherKind {
+  PERCENT
+  AMOUNT
+}
+
+model Voucher {
+  id          String      @id @default(uuid())
+  tenantId    String
+  code        String
+  kind        VoucherKind
+  value       Decimal     @db.Decimal(18, 3)
+  minSubtotal Decimal     @default(0) @db.Decimal(18, 3)
+  validFrom   DateTime?
+  validTo     DateTime?
+  maxUses     Int?
+  usedCount   Int         @default(0)
+  active      Boolean     @default(true)
+
+  @@unique([tenantId, code])
+}
+
+model VoucherRedemption {
+  id        String   @id @default(uuid())
+  tenantId  String
+  voucherId String
+  orderId   String
+  createdAt DateTime @default(now())
+
+  @@unique([orderId])
+}
+
+enum GiftCardStatus {
+  ACTIVE
+  EXHAUSTED
+  VOID
+}
+
+model GiftCard {
+  id            String         @id @default(uuid())
+  tenantId      String
+  code          String
+  initialAmount Decimal        @db.Decimal(18, 3)
+  balance       Decimal        @db.Decimal(18, 3)
+  status        GiftCardStatus @default(ACTIVE)
+  issuedBy      String
+  journalId     String?
+  createdAt     DateTime       @default(now())
+
+  @@unique([tenantId, code])
+}
+
+// Enrolled POS tablet. The device key is stored hashed; offline sync must present it.
+model Device {
+  id         String    @id @default(uuid())
+  tenantId   String
+  branchId   String
+  name       String
+  keyHash    String
+  active     Boolean   @default(true)
+  enrolledBy String
+  createdAt  DateTime  @default(now())
+  lastSeenAt DateTime?
+}
+
+enum OfflineStatus {
+  APPLIED
+  REJECTED
+}
+
+// One row per operation a device uploaded, so a retry never double-applies and nothing is silently lost.
+model OfflineOperation {
+  id        String        @id @default(uuid())
+  tenantId  String
+  deviceId  String
+  opId      String
+  kind      String
+  payload   Json
+  status    OfflineStatus
+  result    Json?
+  error     String?
+  orderId   String?
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  @@unique([tenantId, deviceId, opId])
+}
+
+// ============================================================ POS: shifts, orders, payments
+
+enum ShiftStatus {
+  OPEN
+  CLOSED
+}
+
+model Shift {
+  id           String      @id @default(uuid())
+  tenantId     String
+  branchId     String
+  cashierId    String
+  deviceId     String?
+  status       ShiftStatus @default(OPEN)
+  openingFloat Decimal     @default(0) @db.Decimal(18, 3)
+  expectedCash Decimal?    @db.Decimal(18, 3)
+  countedCash  Decimal?    @db.Decimal(18, 3)
+  variance     Decimal?    @db.Decimal(18, 3)
+  journalId    String?
+  openedAt     DateTime    @default(now())
+  closedAt     DateTime?
+  closedBy     String?
+
+  entries ShiftCashEntry[]
+
+  @@index([tenantId, branchId, status])
+}
+
+// Every effect on the cash drawer, signed. Expected cash at close is the sum of these.
+model ShiftCashEntry {
+  id        String   @id @default(uuid())
+  tenantId  String
+  shiftId   String
+  kind      String // FLOAT | SALE | REFUND | DROP | GIFT_CARD_SALE
+  amount    Decimal  @db.Decimal(18, 3)
+  refType   String?
+  refId     String?
+  createdBy String
+  createdAt DateTime @default(now())
+
+  shift Shift @relation(fields: [shiftId], references: [id])
+
+  @@index([shiftId])
+}
+
+enum OrderChannel {
+  DINE_IN
+  TAKEAWAY
+  PICKUP
+  DELIVERY
+  ONLINE
+  AGGREGATOR
+}
+
+enum OrderStatus {
+  OPEN
+  SENT
+  COMPLETED
+  VOIDED
+}
+
+enum RefundStatus {
+  NONE
+  PARTIAL
+  FULL
+}
+
+enum ExternalStatus {
+  NOT_REQUIRED
+  PENDING
+  SUBMITTED
+  ACCEPTED
+  REJECTED
+}
+
+// Three independent tracks: operational status, financial posting status, external (e-invoice/settlement) status.
+// @businessEvent
+model Order {
+  id               String         @id @default(uuid())
+  tenantId         String
+  number           String
+  branchId         String
+  shiftId          String?
+  tableId          String?
+  channel          OrderChannel   @default(DINE_IN)
+  status           OrderStatus    @default(OPEN)
+  refundStatus     RefundStatus   @default(NONE)
+  postingStatus    PostingStatus  @default(PENDING)
+  externalStatus   ExternalStatus @default(NOT_REQUIRED)
+  customerId       String?
+  guestCount       Int?
+  notes            String?
+  source           String         @default("POS") // POS | OFFLINE | ONLINE | AGGREGATOR
+  externalRef      String? // aggregator/online order reference
+  // Delivery/pickup progress for ONLINE and AGGREGATOR orders: PLACED > ACCEPTED > READY > OUT_FOR_DELIVERY > DELIVERED | CANCELLED | REJECTED
+  fulfilmentStatus String?
+  trackingCode     String?
+  promisedAt       DateTime?
+  // Contact and address needed to fulfil the order (kept only as long as fulfilment requires; see retention controls)
+  contact          Json?
+  subtotal         Decimal        @default(0) @db.Decimal(18, 3) // gross, tax-inclusive
+  discountTotal    Decimal        @default(0) @db.Decimal(18, 3)
+  total            Decimal        @default(0) @db.Decimal(18, 3)
+  taxTotal         Decimal        @default(0) @db.Decimal(18, 3)
+  refundedTotal    Decimal        @default(0) @db.Decimal(18, 3)
+  // Order-level discounts: [{kind: PERCENT|AMOUNT|VOUCHER|LOYALTY, value, amount, reason, approvedBy, voucherId?, points?}]
+  discounts        Json           @default("[]")
+  journalId        String?
+  cogsJournalId    String?
+  idempotencyKey   String
+  correlationId    String
+  createdBy        String
+  createdAt        DateTime       @default(now())
+  completedAt      DateTime?
+
+  lines   OrderLine[]
+  tenders Tender[]
+  invoice Invoice?
+  refunds Refund[]
+  tickets KitchenTicket[]
+
+  @@unique([tenantId, number])
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, branchId, status])
+}
+
+model OrderLine {
+  id          String    @id @default(uuid())
+  tenantId    String
+  orderId     String
+  menuItemId  String
+  variantId   String?
+  name        String
+  nameAr      String?
+  qty         Int
+  unitPrice   Decimal   @db.Decimal(18, 3) // tax-inclusive, after variant and modifiers
+  modifiers   Json      @default("[]") // [{id,name,priceDelta}]
+  gross       Decimal   @db.Decimal(18, 3)
+  discount    Decimal   @default(0) @db.Decimal(18, 3)
+  total       Decimal   @db.Decimal(18, 3)
+  taxRate     Decimal   @db.Decimal(6, 4)
+  tax         Decimal   @db.Decimal(18, 3)
+  net         Decimal   @db.Decimal(18, 3)
+  stationKey  String?
+  notes       String?
+  voided      Boolean   @default(false)
+  voidReason  String?
+  refundedQty Int       @default(0)
+  sentAt      DateTime?
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+}
+
+enum TenderMethod {
+  CASH
+  CARD
+  DIGITAL
+  GIFT_CARD
+  MARKETPLACE // paid by the customer to a marketplace that owes the merchant
+}
+
+enum TenderStatus {
+  AUTHORIZED
+  CAPTURED
+  FAILED
+  VOIDED
+}
+
+// Payment state lives here, separate from the order's operational state.
+// @businessEvent
+model Tender {
+  id             String       @id @default(uuid())
+  tenantId       String
+  orderId        String
+  shiftId        String?
+  method         TenderMethod
+  amount         Decimal      @db.Decimal(18, 3) // amount applied to the bill
+  tendered       Decimal      @db.Decimal(18, 3) // cash handed over (>= amount)
+  change         Decimal      @default(0) @db.Decimal(18, 3)
+  status         TenderStatus @default(AUTHORIZED)
+  reference      String? // terminal / gift card / wallet reference
+  settlementId   String?
+  idempotencyKey String
+  correlationId  String
+  createdBy      String
+  createdAt      DateTime     @default(now())
+  capturedAt     DateTime?
+
+  order Order @relation(fields: [orderId], references: [id])
+
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, method, status])
+}
+
+model Invoice {
+  id             String         @id @default(uuid())
+  tenantId       String
+  orderId        String         @unique
+  number         String
+  issuedAt       DateTime       @default(now())
+  subtotal       Decimal        @db.Decimal(18, 3)
+  discountTotal  Decimal        @db.Decimal(18, 3)
+  taxTotal       Decimal        @db.Decimal(18, 3)
+  total          Decimal        @db.Decimal(18, 3)
+  externalStatus ExternalStatus @default(NOT_REQUIRED)
+  externalRef    String?
+
+  order Order @relation(fields: [orderId], references: [id])
+
+  @@unique([tenantId, number])
+}
+
+// Credit note. Original order, invoice and journals are never edited; a refund adds reversing records.
+// @businessEvent
+model Refund {
+  id             String        @id @default(uuid())
+  tenantId       String
+  orderId        String
+  number         String
+  reason         String
+  method         String // CASH | CARD | DIGITAL | GIFT_CARD (the original tender is normally used)
+  total          Decimal       @db.Decimal(18, 3)
+  tax            Decimal       @db.Decimal(18, 3)
+  net            Decimal       @db.Decimal(18, 3)
+  restock        Boolean       @default(false)
+  approvedBy     String?
+  journalId      String?
+  postingStatus  PostingStatus @default(PENDING)
+  idempotencyKey String
+  correlationId  String
+  createdBy      String
+  createdAt      DateTime      @default(now())
+
+  order Order        @relation(fields: [orderId], references: [id])
+  lines RefundLine[]
+
+  @@unique([tenantId, number])
+  @@unique([tenantId, idempotencyKey])
+}
+
+model RefundLine {
+  id          String  @id @default(uuid())
+  tenantId    String
+  refundId    String
+  orderLineId String
+  qty         Int
+  total       Decimal @db.Decimal(18, 3)
+  tax         Decimal @db.Decimal(18, 3)
+  net         Decimal @db.Decimal(18, 3)
+
+  refund Refund @relation(fields: [refundId], references: [id], onDelete: Cascade)
+}
+
+enum TicketStatus {
+  NEW
+  IN_PROGRESS
+  READY
+  BUMPED
+  CANCELLED
+}
+
+model KitchenTicket {
+  id        String       @id @default(uuid())
+  tenantId  String
+  branchId  String
+  orderId   String
+  stationId String
+  status    TicketStatus @default(NEW)
+  priority  String       @default("NORMAL") // NORMAL | RUSH
+  items     Json // [{lineId,name,qty,modifiers,notes,cancelled}]
+  createdAt DateTime     @default(now())
+  startedAt DateTime?
+  readyAt   DateTime?
+  bumpedAt  DateTime?
+
+  order   Order   @relation(fields: [orderId], references: [id])
+  station Station @relation(fields: [stationId], references: [id])
+
+  @@index([tenantId, branchId, status])
+}
+
+enum SettlementStatus {
+  MATCHED
+  EXCEPTION
+}
+
+// Card/terminal or marketplace payout statement, matched against tenders (POS-03).
+model Settlement {
+  id             String           @id @default(uuid())
+  tenantId       String
+  provider       String
+  settlementDate DateTime         @db.Date
+  reference      String
+  gross          Decimal          @db.Decimal(18, 3)
+  fees           Decimal          @db.Decimal(18, 3)
+  net            Decimal          @db.Decimal(18, 3)
+  status         SettlementStatus @default(EXCEPTION)
+  journalId      String?
+  createdBy      String
+  createdAt      DateTime         @default(now())
+
+  lines SettlementLine[]
+
+  @@unique([tenantId, provider, reference])
+}
+
+model SettlementLine {
+  id           String  @id @default(uuid())
+  tenantId     String
+  settlementId String
+  reference    String
+  amount       Decimal @db.Decimal(18, 3)
+  tenderId     String?
+  orderId      String?
+  matched      Boolean @default(false)
+  note         String?
+
+  settlement Settlement @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+}
+
+// ============================================================ TAX FILING (WF-07)
+
+enum TaxReturnStatus {
+  DRAFT
+  IN_REVIEW
+  AWAITING_AUTHORIZATION
+  APPROVED
+  FILED
+  PAID
+  ARCHIVED
+  CANCELLED
+}
+
+model TaxPeriod {
+  id            String   @id @default(uuid())
+  tenantId      String
+  legalEntityId String
+  label         String
+  startDate     DateTime @db.Date
+  endDate       DateTime @db.Date
+  dueDate       DateTime @db.Date
+  createdAt     DateTime @default(now())
+
+  returns TaxReturn[]
+
+  @@unique([tenantId, legalEntityId, startDate])
+}
+
+// One version per generation. Only the latest non-cancelled version moves through review, authorization and filing.
+model TaxReturn {
+  id                     String          @id @default(uuid())
+  tenantId               String
+  periodId               String
+  legalEntityId          String
+  version                Int
+  status                 TaxReturnStatus @default(DRAFT)
+  outputBase             Decimal         @db.Decimal(18, 3)
+  outputTax              Decimal         @db.Decimal(18, 3)
+  inputBase              Decimal         @db.Decimal(18, 3)
+  inputTaxRecoverable    Decimal         @db.Decimal(18, 3)
+  inputTaxNonRecoverable Decimal         @db.Decimal(18, 3)
+  netPayable             Decimal         @db.Decimal(18, 3) // output tax less recoverable input tax; negative = refund/credit
+  // [{code, severity, message, details, acknowledged, acknowledgedBy, reason}]
+  findings               Json            @default("[]")
+  workingPapers          Json            @default("{}")
+  generatedBy            String
+  generatedAt            DateTime        @default(now())
+  reviewedBy             String?
+  reviewedAt             DateTime?
+  authorizedBy           String?
+  authorizedAt           DateTime?
+  filingMethod           String? // MANUAL | ADAPTER
+  packageDocId           String?
+  acknowledgmentRef      String?
+  filedAt                DateTime?
+  filedBy                String?
+  paymentRef             String?
+  paymentMethod          String?
+  paidAt                 DateTime?
+  paymentJournalId       String?
+  archivedAt             DateTime?
+
+  period TaxPeriod       @relation(fields: [periodId], references: [id])
+  lines  TaxReturnLine[]
+
+  @@unique([tenantId, periodId, version])
+}
+
+model TaxReturnLine {
+  id        String       @id @default(uuid())
+  tenantId  String
+  returnId  String
+  direction TaxDirection
+  taxRate   Decimal      @db.Decimal(6, 4)
+  eligible  Boolean      @default(true)
+  base      Decimal      @db.Decimal(18, 3)
+  tax       Decimal      @db.Decimal(18, 3)
+  documents Int
+
+  taxReturn TaxReturn @relation(fields: [returnId], references: [id], onDelete: Cascade)
+}
+
+// ============================================================ DIGITAL COMMERCE (WF-05)
+
+model OnlineStoreConfig {
+  id                String   @id @default(uuid())
+  tenantId          String
+  branchId          String
+  enabled           Boolean  @default(false)
+  acceptingOrders   Boolean  @default(true) // pause switch for a busy kitchen
+  pickupEnabled     Boolean  @default(true)
+  deliveryEnabled   Boolean  @default(false)
+  deliveryFee       Decimal  @default(0) @db.Decimal(18, 3)
+  minOrder          Decimal  @default(0) @db.Decimal(18, 3)
+  serviceAreas      Json     @default("[]") // area names the branch delivers to
+  prepMinutes       Int      @default(20)
+  autoAccept        Boolean  @default(false)
+  scheduledOrdering Boolean  @default(false)
+  updatedAt         DateTime @updatedAt
+
+  @@unique([tenantId, branchId])
+}
+
+enum AggregatorProvider {
+  TALABAT
+  CAREEM
+}
+
+// One marketplace store linked to one branch. Credentials live outside the database (adapter configuration).
+model AggregatorConnection {
+  id                  String             @id @default(uuid())
+  tenantId            String
+  provider            AggregatorProvider
+  branchId            String
+  storeRef            String // the merchant's store id at the marketplace
+  enabled             Boolean            @default(true)
+  autoAccept          Boolean            @default(true)
+  commissionRate      Decimal            @default(0) @db.Decimal(6, 4) // expected commission, to spot statement deviations
+  webhookSecretHash   String?
+  lastPollAt          DateTime?
+  lastError           String?
+  consecutiveFailures Int                @default(0)
+  createdAt           DateTime           @default(now())
+
+  mappings AggregatorMenuMapping[]
+  inbound  AggregatorInbound[]
+
+  @@unique([tenantId, provider, storeRef])
+}
+
+model AggregatorMenuMapping {
+  id             String  @id @default(uuid())
+  tenantId       String
+  connectionId   String
+  externalItemId String
+  menuItemId     String
+  variantId      String?
+  // external modifier id -> our modifier id
+  modifierMap    Json    @default("{}")
+
+  connection AggregatorConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@unique([connectionId, externalItemId])
+}
+
+enum InboundStatus {
+  RECEIVED
+  NEEDS_MAPPING
+  ACCEPTED
+  REJECTED
+  CANCELLED
+  ERROR
+}
+
+// Every marketplace order exactly as received, so a payload is never lost even when it cannot be mapped yet.
+model AggregatorInbound {
+  id           String        @id @default(uuid())
+  tenantId     String
+  connectionId String
+  externalId   String
+  payload      Json
+  status       InboundStatus @default(RECEIVED)
+  orderId      String?
+  error        String?
+  receivedAt   DateTime      @default(now())
+  processedAt  DateTime?
+
+  connection AggregatorConnection @relation(fields: [connectionId], references: [id])
+
+  @@unique([connectionId, externalId])
+}
+
+// ============================================================ RECRUITMENT (WF-03)
+
+model JobPosition {
+  id                  String   @id @default(uuid())
+  tenantId            String
+  title               String
+  titleAr             String?
+  payBandMin          Decimal  @db.Decimal(18, 3)
+  payBandMax          Decimal  @db.Decimal(18, 3)
+  requiredSkills      Json     @default("[]")
+  // Objective, job-related eligibility criteria only: [{type, value, label}]. Types are an allowlist (see screening).
+  eligibilityCriteria Json     @default("[]")
+  interviewTemplateId String?
+  requiredDocuments   Json     @default("[\"NATIONAL_ID\",\"BANK_DETAILS\"]")
+  trainingModules     Json     @default("[]") // [{title, mandatory, dueDays}]
+  active              Boolean  @default(true)
+  createdAt           DateTime @default(now())
+
+  @@unique([tenantId, title])
+}
+
+model HeadcountBudget {
+  id         String @id @default(uuid())
+  tenantId   String
+  branchId   String
+  positionId String
+  approved   Int
+
+  @@unique([branchId, positionId])
+}
+
+enum VacancyStatus {
+  DRAFT
+  PENDING_APPROVAL
+  OPEN
+  FILLED
+  CLOSED
+  CANCELLED
+}
+
+model Vacancy {
+  id             String        @id @default(uuid())
+  tenantId       String
+  number         String
+  branchId       String
+  legalEntityId  String
+  positionId     String
+  headcount      Int
+  filled         Int           @default(0)
+  payMin         Decimal       @db.Decimal(18, 3)
+  payMax         Decimal       @db.Decimal(18, 3)
+  requiredSkills Json          @default("[]")
+  criteria       Json          @default("[]")
+  status         VacancyStatus @default(DRAFT)
+  publicCode     String        @unique
+  language       String        @default("en")
+  notes          String?
+  requestedBy    String
+  closesAt       DateTime?
+  createdAt      DateTime      @default(now())
+
+  applications Application[]
+
+  @@unique([tenantId, number])
+}
+
+model InterviewTemplate {
+  id        String   @id @default(uuid())
+  tenantId  String
+  name      String
+  language  String   @default("en")
+  version   Int      @default(1)
+  // [{id, text, textAr?, competency, weight, minWords?}]
+  questions Json
+  // {scale: {min,max}, competencies: [{key, name, weight, keywords: []}], thresholds: {advance, review}, maxFollowUps}
+  rubric    Json
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+}
+
+model Candidate {
+  id                   String    @id @default(uuid())
+  tenantId             String
+  name                 String
+  phone                String
+  email                String?
+  dataConsentAt        DateTime
+  privacyNoticeVersion String
+  retentionUntil       DateTime
+  anonymizedAt         DateTime?
+  createdAt            DateTime  @default(now())
+
+  applications Application[]
+
+  @@unique([tenantId, phone])
+}
+
+enum ApplicationStatus {
+  RECEIVED
+  INCOMPLETE
+  SCREENED_OUT
+  SCREENED
+  INTERVIEW_INVITED
+  INTERVIEW_SCHEDULED
+  INTERVIEWED
+  UNDER_REVIEW
+  ADVANCED
+  OFFER_PENDING
+  ONBOARDING
+  HIRED
+  REJECTED
+  WITHDRAWN
+}
+
+model Application {
+  id                      String            @id @default(uuid())
+  tenantId                String
+  vacancyId               String
+  candidateId             String
+  status                  ApplicationStatus @default(RECEIVED)
+  intake                  Json              @default("{}")
+  missing                 Json              @default("[]")
+  eligibility             Json              @default("[]")
+  trackingToken           String            @unique
+  rejectionReason         String?
+  decidedBy               String? // a user id, or POLICY:<key>:v<n> for rule-based progression
+  decidedAt               DateTime?
+  humanInterviewRequested Boolean           @default(false)
+  createdAt               DateTime          @default(now())
+  updatedAt               DateTime          @updatedAt
+
+  vacancy   Vacancy    @relation(fields: [vacancyId], references: [id])
+  candidate Candidate  @relation(fields: [candidateId], references: [id])
+  interview Interview?
+  appeals   Appeal[]
+
+  @@unique([vacancyId, candidateId])
+  @@index([tenantId, status])
+}
+
+enum InterviewStatus {
+  INVITED
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+  EXPIRED
+  CANCELLED
+}
+
+model Interview {
+  id               String          @id @default(uuid())
+  tenantId         String
+  applicationId    String          @unique
+  templateId       String
+  templateSnapshot Json // frozen copy so every candidate for a vacancy is scored on the same questions and rubric
+  language         String
+  status           InterviewStatus @default(INVITED)
+  accessToken      String          @unique
+  scheduledFor     DateTime?
+  expiresAt        DateTime
+  consent          Json? // {noticeVersion, processing, recording, at}
+  consentAt        DateTime?
+  transcript       Json            @default("[]") // [{role: AI|CANDIDATE, text, at, questionId?}]
+  recordingDocId   String?
+  currentQuestion  Int             @default(0)
+  followUpsUsed    Int             @default(0)
+  startedAt        DateTime?
+  completedAt      DateTime?
+  retentionUntil   DateTime
+  createdAt        DateTime        @default(now())
+
+  application Application @relation(fields: [applicationId], references: [id])
+  evaluation  Evaluation?
+}
+
+enum EvalRecommendation {
+  ADVANCE
+  REVIEW
+  DECLINE
+}
+
+// An AI-produced assessment is advice with evidence. It never rejects anyone by itself.
+model Evaluation {
+  id                  String             @id @default(uuid())
+  tenantId            String
+  interviewId         String             @unique
+  applicationId       String
+  scores              Json // [{questionId, competency, score, evidence: [], reasoning}]
+  overall             Decimal            @db.Decimal(5, 2)
+  recommendation      EvalRecommendation
+  confidence          Decimal            @db.Decimal(5, 4)
+  flags               Json               @default("[]")
+  humanReviewRequired Boolean            @default(true)
+  engine              String
+  engineVersion       String
+  rubricVersion       Int
+  reviewedBy          String?
+  reviewedAt          DateTime?
+  reviewDecision      String?
+  reviewNotes         String?
+  createdAt           DateTime           @default(now())
+
+  interview Interview @relation(fields: [interviewId], references: [id])
+}
+
+enum AppealStatus {
+  OPEN
+  UPHELD
+  OVERTURNED
+}
+
+model Appeal {
+  id                String       @id @default(uuid())
+  tenantId          String
+  applicationId     String
+  reason            String
+  status            AppealStatus @default(OPEN)
+  originalDecidedBy String?
+  resolvedBy        String?
+  resolution        String?
+  openedAt          DateTime     @default(now())
+  resolvedAt        DateTime?
+
+  application Application @relation(fields: [applicationId], references: [id])
+}
+
+// ============================================================ ONBOARDING AND PEOPLE CORE (WF-03 end, WF-04 base)
+
+enum OfferStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  SENT
+  ACCEPTED
+  DECLINED
+  WITHDRAWN
+}
+
+model Offer {
+  id                 String      @id @default(uuid())
+  tenantId           String
+  applicationId      String      @unique
+  number             String
+  positionId         String
+  branchId           String
+  startDate          DateTime    @db.Date
+  contractType       String      @default("OPEN") // OPEN | FIXED_TERM
+  endDate            DateTime?   @db.Date
+  salaryBasic        Decimal     @db.Decimal(18, 3)
+  allowances         Json        @default("[]") // [{name, amount}]
+  weeklyHours        Decimal     @default(48) @db.Decimal(5, 2)
+  probationMonths    Int         @default(3)
+  status             OfferStatus @default(DRAFT)
+  contractText       Json? // {en, ar}
+  contractDocId      String?
+  candidateSignedAt  DateTime?
+  candidateSignature String?
+  countersignedBy    String?
+  countersignedAt    DateTime?
+  createdBy          String
+  createdAt          DateTime    @default(now())
+
+  @@unique([tenantId, number])
+}
+
+enum DocStatus {
+  REQUIRED
+  RECEIVED
+  VERIFIED
+  REJECTED
+}
+
+model ApplicationDocument {
+  id                 String    @id @default(uuid())
+  tenantId           String
+  applicationId      String
+  type               String
+  status             DocStatus @default(REQUIRED)
+  evidenceDocumentId String?
+  verifiedBy         String?
+  note               String?
+  updatedAt          DateTime  @updatedAt
+
+  @@unique([applicationId, type])
+}
+
+enum EmployeeStatus {
+  ONBOARDING
+  ACTIVE
+  ON_LEAVE
+  TERMINATED
+}
+
+// The legal employer is explicit; branch assignments are separate so one person can work at several branches.
+model Employee {
+  id                String         @id @default(uuid())
+  tenantId          String
+  number            String
+  legalEntityId     String
+  userId            String?
+  candidateId       String?
+  name              String
+  nameAr            String?
+  phone             String
+  email             String?
+  status            EmployeeStatus @default(ONBOARDING)
+  hireDate          DateTime       @db.Date
+  terminationDate   DateTime?      @db.Date
+  positionId        String
+  // AES-256-GCM encrypted JSON: national id, date of birth, address, bank account. Never returned by list endpoints.
+  sensitive         String?
+  attendanceProfile Json           @default("{}")
+  createdAt         DateTime       @default(now())
+
+  assignments EmployeeAssignment[]
+  contracts   EmploymentContract[]
+
+  @@unique([tenantId, number])
+  @@index([tenantId, status])
+}
+
+model EmployeeAssignment {
+  id         String    @id @default(uuid())
+  tenantId   String
+  employeeId String
+  branchId   String
+  isPrimary  Boolean   @default(false)
+  validFrom  DateTime  @db.Date
+  validTo    DateTime? @db.Date
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, branchId])
+}
+
+model EmploymentContract {
+  id              String    @id @default(uuid())
+  tenantId        String
+  employeeId      String
+  version         Int
+  type            String
+  startDate       DateTime  @db.Date
+  endDate         DateTime? @db.Date
+  salaryBasic     Decimal   @db.Decimal(18, 3)
+  allowances      Json      @default("[]")
+  weeklyHours     Decimal   @db.Decimal(5, 2)
+  probationMonths Int       @default(3)
+  status          String    @default("ACTIVE") // ACTIVE | SUPERSEDED | ENDED
+  documentId      String?
+  signedAt        DateTime?
+  createdAt       DateTime  @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, version])
+}
+
+enum SscKind {
+  REGISTRATION
+  CHANGE
+  TERMINATION
+}
+
+enum SscStatus {
+  PREPARED
+  SUBMITTED
+  CONFIRMED
+  FAILED
+}
+
+// Social security obligations are tracked separately from payroll. Official submission needs a verified integration.
+model SscAction {
+  id          String    @id @default(uuid())
+  tenantId    String
+  employeeId  String
+  kind        SscKind
+  status      SscStatus @default(PREPARED)
+  payload     Json
+  reference   String?
+  notes       String?
+  preparedAt  DateTime  @default(now())
+  submittedAt DateTime?
+  confirmedAt DateTime?
+
+  @@index([tenantId, status])
+}
+
+enum AssignmentStatus {
+  ASSIGNED
+  DONE
+}
+
+model TrainingAssignment {
+  id          String           @id @default(uuid())
+  tenantId    String
+  employeeId  String
+  title       String
+  mandatory   Boolean          @default(true)
+  dueDate     DateTime?        @db.Date
+  status      AssignmentStatus @default(ASSIGNED)
+  completedAt DateTime?
+}
+
+model UserInvite {
+  id        String    @id @default(uuid())
+  tenantId  String
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+}
+
+// ============================================================ WORKFORCE: schedules, attendance, leave (WF-04)
+
+model ShiftTemplate {
+  id           String  @id @default(uuid())
+  tenantId     String
+  branchId     String?
+  name         String
+  startTime    String // "HH:MM" local time
+  endTime      String // may be earlier than startTime for overnight shifts
+  breakMinutes Int     @default(30)
+  active       Boolean @default(true)
+}
+
+model ShiftSchedule {
+  id         String   @id @default(uuid())
+  tenantId   String
+  employeeId String
+  branchId   String
+  date       DateTime @db.Date
+  startAt    DateTime
+  endAt      DateTime
+  templateId String?
+  status     String   @default("PUBLISHED") // PUBLISHED | CANCELLED | LEAVE_CONFLICT
+  notes      String?
+  createdBy  String
+  createdAt  DateTime @default(now())
+
+  @@index([tenantId, employeeId, date])
+  @@index([tenantId, branchId, date])
+}
+
+enum SwapStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+model ShiftSwapRequest {
+  id             String     @id @default(uuid())
+  tenantId       String
+  scheduleId     String
+  fromEmployeeId String
+  toEmployeeId   String
+  status         SwapStatus @default(PENDING)
+  reason         String?
+  decidedBy      String?
+  decidedAt      DateTime?
+  createdAt      DateTime   @default(now())
+}
+
+enum TimeEntryStatus {
+  OPEN
+  COMPLETE
+  NEEDS_FIX
+  APPROVED
+}
+
+model TimeEntry {
+  id                String          @id @default(uuid())
+  tenantId          String
+  employeeId        String
+  branchId          String
+  scheduleId        String?
+  clockIn           DateTime
+  clockOut          DateTime?
+  breakMinutes      Int             @default(0)
+  source            String // MOBILE | KIOSK | MANUAL
+  status            TimeEntryStatus @default(OPEN)
+  lateMinutes       Int             @default(0)
+  earlyLeaveMinutes Int             @default(0)
+  workedMinutes     Int?
+  overtimeMinutes   Int?
+  flags             Json            @default("[]") // [{code, message}]
+  correctionOf      String?
+  approvedBy        String?
+  approvedAt        DateTime?
+  note              String?
+  createdBy         String
+  createdAt         DateTime        @default(now())
+
+  @@index([tenantId, employeeId, clockIn])
+}
+
+model LeaveType {
+  id                           String   @id @default(uuid())
+  tenantId                     String
+  key                          String
+  name                         String
+  nameAr                       String?
+  paid                         Boolean  @default(true)
+  annualDays                   Decimal  @default(0) @db.Decimal(6, 2)
+  accrualMonthly               Boolean  @default(true)
+  requiresCertificateAfterDays Int?
+  carryOverMax                 Decimal? @db.Decimal(6, 2)
+  statutory                    Boolean  @default(false)
+
+  @@unique([tenantId, key])
+}
+
+model LeaveBalance {
+  id          String  @id @default(uuid())
+  tenantId    String
+  employeeId  String
+  leaveTypeId String
+  year        Int
+  accrued     Decimal @default(0) @db.Decimal(6, 2)
+  used        Decimal @default(0) @db.Decimal(6, 2)
+  carried     Decimal @default(0) @db.Decimal(6, 2)
+
+  @@unique([employeeId, leaveTypeId, year])
+}
+
+enum LeaveStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+model LeaveRequest {
+  id               String      @id @default(uuid())
+  tenantId         String
+  employeeId       String
+  leaveTypeId      String
+  startDate        DateTime    @db.Date
+  endDate          DateTime    @db.Date
+  days             Decimal     @db.Decimal(6, 2)
+  status           LeaveStatus @default(PENDING)
+  reason           String?
+  certificateDocId String?
+  decidedBy        String?
+  decidedAt        DateTime?
+  decisionNote     String?
+  createdAt        DateTime    @default(now())
+
+  @@index([tenantId, employeeId, startDate])
+}
+
+// ============================================================ PAYROLL (WF-04)
+
+// Versioned, effective-dated statutory and contractual rules. Placeholder values must be verified before a run can be finalized.
+model PayrollRuleSet {
+  id               String    @id @default(uuid())
+  tenantId         String
+  version          Int
+  effectiveFrom    DateTime  @db.Date
+  rules            Json
+  notes            String?
+  status           String    @default("DRAFT") // DRAFT | ACTIVE | RETIRED
+  verifiedBy       String?
+  verifiedAt       DateTime?
+  verificationNote String?
+  createdBy        String
+  createdAt        DateTime  @default(now())
+
+  @@unique([tenantId, version])
+}
+
+enum PayrollStatus {
+  DRAFT
+  CALCULATED
+  IN_REVIEW
+  APPROVED
+  FINALIZED
+  PAID
+  CANCELLED
+}
+
+model PayrollRun {
+  id               String        @id @default(uuid())
+  tenantId         String
+  number           String
+  legalEntityId    String
+  periodStart      DateTime      @db.Date
+  periodEnd        DateTime      @db.Date
+  status           PayrollStatus @default(DRAFT)
+  version          Int           @default(1)
+  ruleSetId        String
+  ruleVersion      Int
+  totals           Json          @default("{}")
+  createdBy        String
+  reviewedBy       String?
+  reviewedAt       DateTime?
+  approvedBy       String?
+  approvedAt       DateTime?
+  finalizedAt      DateTime?
+  journalId        String?
+  bankFileDocId    String?
+  paidAt           DateTime?
+  paymentRef       String?
+  paymentJournalId String?
+  createdAt        DateTime      @default(now())
+
+  lines      PayrollRunLine[]
+  exceptions PayrollException[]
+
+  @@unique([tenantId, number])
+  @@index([tenantId, legalEntityId, periodStart])
+}
+
+model PayrollRunLine {
+  id                   String  @id @default(uuid())
+  tenantId             String
+  runId                String
+  employeeId           String
+  branchId             String
+  basic                Decimal @db.Decimal(18, 3)
+  allowances           Decimal @db.Decimal(18, 3)
+  overtimePay          Decimal @default(0) @db.Decimal(18, 3)
+  otherEarnings        Decimal @default(0) @db.Decimal(18, 3) // adjustments, retro pay, settlements
+  lateDeduction        Decimal @default(0) @db.Decimal(18, 3)
+  unpaidLeaveDeduction Decimal @default(0) @db.Decimal(18, 3)
+  gross                Decimal @db.Decimal(18, 3)
+  sscEmployee          Decimal @db.Decimal(18, 3)
+  sscEmployer          Decimal @db.Decimal(18, 3)
+  incomeTax            Decimal @db.Decimal(18, 3)
+  advances             Decimal @default(0) @db.Decimal(18, 3)
+  otherDeductions      Decimal @default(0) @db.Decimal(18, 3)
+  net                  Decimal @db.Decimal(18, 3)
+  regularHours         Decimal @default(0) @db.Decimal(8, 2)
+  overtimeHours        Decimal @default(0) @db.Decimal(8, 2)
+  trace                Json    @default("{}") // step-by-step calculation, so every figure can be explained
+  payslipDocId         String?
+
+  run PayrollRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, employeeId])
+}
+
+enum ExceptionSeverity {
+  HARD
+  SOFT
+}
+
+model PayrollException {
+  id         String            @id @default(uuid())
+  tenantId   String
+  runId      String
+  employeeId String?
+  code       String
+  severity   ExceptionSeverity
+  message    String
+  details    Json              @default("{}")
+  status     String            @default("OPEN") // OPEN | RESOLVED | ACKNOWLEDGED
+  resolvedBy String?
+  note       String?
+  createdAt  DateTime          @default(now())
+
+  run PayrollRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId, status])
+}
+
+model EmployeeAdvance {
+  id                String   @id @default(uuid())
+  tenantId          String
+  employeeId        String
+  amount            Decimal  @db.Decimal(18, 3)
+  installments      Int
+  installmentAmount Decimal  @db.Decimal(18, 3)
+  remaining         Decimal  @db.Decimal(18, 3)
+  status            String   @default("ACTIVE") // ACTIVE | CLEARED
+  reason            String?
+  approvedBy        String?
+  createdBy         String
+  issuedAt          DateTime @default(now())
+}
+
+// One-off earnings or deductions applied to the next run: corrections, retroactive pay, final settlements.
+model PayrollAdjustment {
+  id           String   @id @default(uuid())
+  tenantId     String
+  employeeId   String
+  kind         String // EARNING | DEDUCTION
+  label        String
+  amount       Decimal  @db.Decimal(18, 3)
+  sourceRef    String? // idempotency for generated adjustments (retro, settlement)
+  appliedRunId String?
+  createdBy    String
+  createdAt    DateTime @default(now())
+
+  @@unique([tenantId, sourceRef])
+}
+
+model StatutoryObligation {
+  id        String    @id @default(uuid())
+  tenantId  String
+  runId     String
+  kind      String // SSC | INCOME_TAX
+  amount    Decimal   @db.Decimal(18, 3)
+  dueDate   DateTime  @db.Date
+  status    String    @default("PENDING") // PENDING | PAID
+  reference String?
+  paidAt    DateTime?
+  journalId String?
+
+  @@unique([runId, kind])
+}
+
+enum OffboardingStatus {
+  INITIATED
+  SETTLEMENT_REVIEW
+  COMPLETED
+  CANCELLED
+}
+
+model Offboarding {
+  id                   String            @id @default(uuid())
+  tenantId             String
+  employeeId           String            @unique
+  reason               String // RESIGNATION | TERMINATION | END_OF_CONTRACT | OTHER
+  noticeDate           DateTime          @db.Date
+  lastWorkingDay       DateTime          @db.Date
+  status               OffboardingStatus @default(INITIATED)
+  checklist            Json              @default("[]") // [{key, label, done, doneBy, doneAt}]
+  settlement           Json?
+  settlementApprovedBy String?
+  initiatedBy          String
+  completedAt          DateTime?
+  createdAt            DateTime          @default(now())
+}
