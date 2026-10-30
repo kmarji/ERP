@@ -1,3 +1,4 @@
+import { uuid } from './uuid';
 import { useSyncExternalStore } from 'react';
 import { api, ApiError, auth, device, deviceHeaders, probe, setNetworkListener } from './api';
 import { kvGet, kvSet, outboxAll, outboxDelete, outboxPut, OutboxOp } from './db';
@@ -64,7 +65,7 @@ export async function downloadBundle(): Promise<Bundle | null> {
 }
 
 export async function queueSale(sale: Record<string, unknown>, meta: { total: number; localNumber: string }) {
-  const op: OutboxOp = { opId: crypto.randomUUID(), kind: 'SALE', capturedAt: new Date().toISOString(), status: 'PENDING', localNumber: meta.localNumber, total: meta.total, sale };
+  const op: OutboxOp = { opId: uuid(), kind: 'SALE', capturedAt: new Date().toISOString(), status: 'PENDING', localNumber: meta.localNumber, total: meta.total, sale };
   await outboxPut(op);
   await refreshCounts();
   return op;

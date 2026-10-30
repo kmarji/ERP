@@ -1,3 +1,4 @@
+import { uuid } from '../lib/uuid';
 import { useState } from 'react';
 import { fmt } from '../lib/format';
 import { useI18n } from '../lib/i18n';
@@ -61,7 +62,7 @@ export function ItemDialog({ item, onAdd, onClose }: { item: MenuItem; onAdd: (l
         <Btn tone="ghost" onClick={() => setQty(Math.max(1, qty - 1))}>-</Btn>
         <span className="w-10 text-center text-2xl">{qty}</span>
         <Btn tone="ghost" onClick={() => setQty(qty + 1)}>+</Btn>
-        <Btn className="flex-1" disabled={!valid} onClick={() => onAdd({ uid: crypto.randomUUID(), menuItemId: item.id, name: item.name, nameAr: item.nameAr, variantId, variantName: variant?.name, modifiers: mods, qty, unitPrice: unit, taxRate: item.taxRate, notes: notes || undefined })}>
+        <Btn className="flex-1" disabled={!valid} onClick={() => onAdd({ uid: uuid(), menuItemId: item.id, name: item.name, nameAr: item.nameAr, variantId, variantName: variant?.name, modifiers: mods, qty, unitPrice: unit, taxRate: item.taxRate, notes: notes || undefined })}>
           {t('Add')} - {fmt(unit * qty)}
         </Btn>
       </div>

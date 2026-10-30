@@ -27,4 +27,6 @@ cd backend && npm test && npx jest --config ./test/jest-e2e.json --forceExit && 
 - **Jordanian tax, social security and payroll values are placeholders.** Payroll cannot be finalized until a person verifies a rule set. The chart of accounts is a starting point for an accountant.
 - The OpenRouter interview adapter is implemented but untested against the live API; the AI never rejects a candidate.
 
+Demo guide with URLs and logins: `DEMO.md`. `./seed.sh` seeds the demo data into a running stack.
+
 Docs: `docs/ARCHITECTURE.md`, `docs/POSTING_MATRIX.md`, `docs/POLICY_RBAC.md`, `docs/INTEGRATIONS.md`.

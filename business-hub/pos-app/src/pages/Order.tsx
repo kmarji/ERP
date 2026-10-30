@@ -1,3 +1,4 @@
+import { uuid } from '../lib/uuid';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -112,8 +113,8 @@ export default function OrderPage() {
   };
 
   async function sellOffline(tendered: number) {
-    const sale = { clientOrderId: crypto.randomUUID(), channel: effChannel === 'DELIVERY' ? 'TAKEAWAY' : effChannel, tableId: effChannel === 'DINE_IN' ? table?.id : undefined, lines: cart.map((l) => ({ ...toLine(l), unitPrice: l.unitPrice })), tenders: [{ method: 'CASH', tendered }] };
-    const op = await queueSale(sale, { total: cartTotal, localNumber: `OFF-${crypto.randomUUID().slice(0, 6).toUpperCase()}` });
+    const sale = { clientOrderId: uuid(), channel: effChannel === 'DELIVERY' ? 'TAKEAWAY' : effChannel, tableId: effChannel === 'DINE_IN' ? table?.id : undefined, lines: cart.map((l) => ({ ...toLine(l), unitPrice: l.unitPrice })), tenders: [{ method: 'CASH', tendered }] };
+    const op = await queueSale(sale, { total: cartTotal, localNumber: `OFF-${uuid().slice(0, 6).toUpperCase()}` });
     const taxes = new Map<number, { net: number; tax: number }>();
     for (const l of cart) {
       const tot = l.unitPrice * l.qty;

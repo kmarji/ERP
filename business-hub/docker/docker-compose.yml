@@ -40,25 +40,25 @@ services:
       DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:?set DATA_ENCRYPTION_KEY}
       INTEGRATION_MODE: stub
       STORAGE_DIR: /data/storage
-      CORS_ORIGIN: http://localhost:8080,http://localhost:8081,http://localhost:8082,http://localhost:8083,https://localhost,capacitor://localhost
+      CORS_ORIGIN: http://${PUBLIC_HOST:-localhost}:8080,http://${PUBLIC_HOST:-localhost}:8081,http://${PUBLIC_HOST:-localhost}:8082,http://${PUBLIC_HOST:-localhost}:8083,https://localhost,capacitor://localhost
     ports: ["3000:3000"]
     volumes: [storage:/data/storage]
 
-  # Browser-facing apps; API_URL is baked in at build time and must be reachable from the user's browser.
+  # Browser-facing apps; the API address is baked in at build time from PUBLIC_HOST (the server's LAN IP or domain).
   backoffice: &web
-    build: { context: .., dockerfile: docker/web.Dockerfile, args: { APP: frontend } }
+    build: { context: .., dockerfile: docker/web.Dockerfile, args: { APP: frontend, API_URL: "http://${PUBLIC_HOST:-localhost}:3000" } }
     ports: ["8080:80"]
   pos:
     <<: *web
-    build: { context: .., dockerfile: docker/web.Dockerfile, args: { APP: pos-app } }
+    build: { context: .., dockerfile: docker/web.Dockerfile, args: { APP: pos-app, API_URL: "http://${PUBLIC_HOST:-localhost}:3000" } }
     ports: ["8081:80"]
   storefront:
     <<: *web
-    build: { context: .., dockerfile: docker/web.Dockerfile, args: { APP: storefront } }
+    build: { context: .., dockerfile: docker/web.Dockerfile, args: { APP: storefront, API_URL: "http://${PUBLIC_HOST:-localhost}:3000" } }
     ports: ["8082:80"]
   careers:
     <<: *web
-    build: { context: .., dockerfile: docker/web.Dockerfile, args: { APP: careers } }
+    build: { context: .., dockerfile: docker/web.Dockerfile, args: { APP: careers, API_URL: "http://${PUBLIC_HOST:-localhost}:3000" } }
     ports: ["8083:80"]
 
 volumes:

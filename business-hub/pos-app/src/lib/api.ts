@@ -74,4 +74,5 @@ export async function probe(): Promise<boolean> {
   }
 }
 
-export const newKey = () => crypto.randomUUID();
+import { uuid } from './uuid';
+export const newKey = () => uuid();

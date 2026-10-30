@@ -1,3 +1,4 @@
+import { uuid } from '../uuid';
 import { FormEvent, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ApiError, api, recentCodes, useCart, useFetch, useI18n, useTenant } from '../lib';
@@ -39,7 +40,7 @@ export default function Checkout() {
   // One key per checkout attempt, kept across reloads and network failures so a retry can never create a second order.
   // A declined payment voids that order on the server, so after a decline we start a fresh attempt (new key).
   const keyName = `sf_idem_${tenant}_${branchId}`;
-  const idemKey = () => localStorage.getItem(keyName) ?? (localStorage.setItem(keyName, crypto.randomUUID()), localStorage.getItem(keyName)!);
+  const idemKey = () => localStorage.getItem(keyName) ?? (localStorage.setItem(keyName, uuid()), localStorage.getItem(keyName)!);
 
   const fee = fulfilment === 'DELIVERY' ? Number(branch?.deliveryFee ?? 0) : 0;
   const total = cart.subtotal + fee;
@@ -47,7 +48,7 @@ export default function Checkout() {
 
   // ponytail: stand-in for the payment gateway's hosted fields. A real gateway SDK replaces this step and returns a
   // token; card numbers must never be typed into, or sent through, this app. Tokens starting with DECLINE simulate a decline.
-  const authorizeDemoPayment = () => setToken(`${simulateDecline ? 'DECLINE-' : 'tok_'}${crypto.randomUUID().slice(0, 8)}`);
+  const authorizeDemoPayment = () => setToken(`${simulateDecline ? 'DECLINE-' : 'tok_'}${uuid().slice(0, 8)}`);
 
   async function submit(e: FormEvent) {
     e.preventDefault();

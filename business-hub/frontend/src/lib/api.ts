@@ -42,7 +42,8 @@ export async function upload<T = any>(path: string, file: File): Promise<T> {
   return data as T;
 }
 
-export const newKey = () => crypto.randomUUID();
+import { uuid } from './uuid';
+export const newKey = () => uuid();
 
 // Fetches a file with the auth header and saves it through a temporary link.
 export async function download(path: string, filename: string) {
