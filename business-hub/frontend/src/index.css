@@ -1,3 +1,42 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Dark mode: remaps the palette the apps already use, so pages need no per-class dark: variants.
+   Toggled by the "dark" class on <html> (see theme.tsx). */
+html.dark { color-scheme: dark; }
+html.dark body { background: #0b1220; color: #e2e8f0; }
+html.dark input, html.dark select, html.dark textarea { background-color: #0f1626; color: #e2e8f0; }
+html.dark ::placeholder { color: #64748b; }
+html.dark .bg-white { background-color: #111a2b; }
+html.dark .bg-slate-50 { background-color: #0f1626; }
+html.dark .bg-slate-100 { background-color: #182236; }
+html.dark .bg-slate-200 { background-color: #243049; }
+html.dark .bg-slate-300 { background-color: #334155; }
+html.dark .hover\:bg-slate-50:hover { background-color: #172033; }
+html.dark .bg-brand-50 { background-color: #12302d; }
+html.dark .bg-brand-100 { background-color: #164340; }
+html.dark .text-slate-900, html.dark .text-slate-800 { color: #f1f5f9; }
+html.dark .text-slate-700, html.dark .text-slate-600 { color: #cbd5e1; }
+html.dark .text-slate-500 { color: #94a3b8; }
+html.dark .text-slate-400 { color: #7c8aa0; }
+html.dark .text-brand-600, html.dark .text-brand-700, html.dark .text-brand-900 { color: #5eead4; }
+html.dark .border-slate-100, html.dark .border-slate-200 { border-color: #1f2a40; }
+html.dark .border-slate-300 { border-color: #334155; }
+html.dark .divide-slate-100 > :not([hidden]) ~ :not([hidden]) { border-color: #1f2a40; }
+/* status colours: translucent tint + light text */
+html.dark .bg-emerald-50, html.dark .bg-emerald-100 { background-color: rgba(16, 185, 129, .16); }
+html.dark .text-emerald-700, html.dark .text-emerald-800, html.dark .text-emerald-900 { color: #6ee7b7; }
+html.dark .border-emerald-300 { border-color: #047857; }
+html.dark .bg-amber-50, html.dark .bg-amber-100 { background-color: rgba(245, 158, 11, .16); }
+html.dark .text-amber-700, html.dark .text-amber-800, html.dark .text-amber-900 { color: #fcd34d; }
+html.dark .border-amber-200 { border-color: #78350f; }
+html.dark .bg-red-50, html.dark .bg-red-100 { background-color: rgba(239, 68, 68, .16); }
+html.dark .text-red-600, html.dark .text-red-700, html.dark .text-red-800 { color: #fca5a5; }
+html.dark .border-red-300 { border-color: #991b1b; }
+html.dark .bg-sky-100 { background-color: rgba(14, 165, 233, .16); }
+html.dark .text-sky-800 { color: #7dd3fc; }
+html.dark .bg-orange-100 { background-color: rgba(249, 115, 22, .16); }
+html.dark .text-orange-800 { color: #fdba74; }
+/* a receipt is paper: keep it black on white */
+html.dark .receipt, html.dark .receipt * { background-color: #fff; color: #111 !important; }

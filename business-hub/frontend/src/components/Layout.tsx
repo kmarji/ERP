@@ -4,6 +4,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { api, auth } from '../lib/api';
 import { useI18n } from '../lib/i18n';
 import { NAV } from '../nav';
+import { ThemeButton } from '../theme';
 
 export function Layout() {
   const { lang, setLang, t } = useI18n();
@@ -40,6 +41,7 @@ export function Layout() {
       </aside>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="flex shrink-0 items-center justify-end gap-3 border-b border-slate-200 bg-white px-6 py-3 text-sm">
+          <ThemeButton className="rounded border border-slate-300 px-2 py-1 text-xs" />
           <button className="rounded border border-slate-300 px-2 py-1 text-xs" onClick={() => setLang(lang === 'en' ? 'ar' : 'en')}>
             {lang === 'en' ? 'العربية' : 'English'}
           </button>

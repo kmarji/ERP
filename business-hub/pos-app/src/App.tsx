@@ -1,3 +1,4 @@
+import { ThemeButton } from './theme';
 import { Link, Navigate, NavLink, Outlet, Route, Routes, useNavigate } from 'react-router-dom';
 import { Banner } from './components/Banner';
 import { auth } from './lib/api';
@@ -34,6 +35,7 @@ function Shell() {
           <NavLink to="/branch" className={link}>{t('Branch')}</NavLink>
         </nav>
         <div className="flex gap-2">
+          <ThemeButton className="min-h-12 rounded-lg border border-white/40 px-3" />
           <button className="min-h-12 rounded-lg border border-white/40 px-3" onClick={() => setLang(lang === 'en' ? 'ar' : 'en')}>{lang === 'en' ? 'العربية' : 'English'}</button>
           <button className="min-h-12 rounded-lg px-3 underline" onClick={() => { auth.clear(); nav('/login'); }}>{t('Sign out')}</button>
         </div>

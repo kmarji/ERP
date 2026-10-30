@@ -1,3 +1,4 @@
+import { ThemeButton } from './theme';
 import { createContext, ReactNode, useContext, useEffect, useState } from 'react';
 
 const BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
@@ -78,7 +79,10 @@ export function Shell({ children }: { children: ReactNode }) {
     <div className="mx-auto min-h-screen max-w-2xl px-4 pb-16">
       <header className="flex items-center justify-between py-4">
         <span className="text-lg font-semibold text-brand-900">Careers</span>
+        <span className="flex gap-2">
+        <ThemeButton className="rounded border border-slate-300 px-3 py-1 text-sm" />
         <button className="rounded border border-slate-300 px-3 py-1 text-sm" onClick={() => setLang(lang === 'en' ? 'ar' : 'en')}>{lang === 'en' ? 'العربية' : 'English'}</button>
+        </span>
       </header>
       <main>{children}</main>
     </div>

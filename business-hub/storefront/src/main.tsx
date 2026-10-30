@@ -1,3 +1,4 @@
+import { ThemeButton } from './theme';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Link, Navigate, Route, Routes } from 'react-router-dom';
@@ -14,9 +15,12 @@ function Shell({ children }: { children: React.ReactNode }) {
     <>
       <header className="flex items-center justify-between bg-brand-900 px-4 py-3 text-white">
         <Link to="/" className="text-lg font-semibold">{t('Order online')}</Link>
+        <span className="flex gap-2">
+        <ThemeButton className="rounded border border-white/40 px-3 py-1 text-sm" />
         <button className="rounded border border-white/40 px-3 py-1 text-sm" onClick={() => setLang(lang === 'en' ? 'ar' : 'en')} aria-label="Switch language">
           {lang === 'en' ? 'العربية' : 'English'}
         </button>
+        </span>
       </header>
       <main className="mx-auto max-w-2xl px-4 pb-28 pt-4">{children}</main>
     </>
