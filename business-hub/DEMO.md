@@ -66,3 +66,15 @@ cd docker && docker compose up -d --build && cd ..
 - **Payroll rules** are unverified placeholders: a run can be calculated and reviewed but not finalized until someone verifies the rule set (Payroll, Rules). Verify it before the demo if you want to show finalization, and say the values are placeholders.
 - **Integrations are stubs** (JoFotara, social security, delivery apps, card terminals). Card payments are a typed approval code. Tax, social security and payroll values are placeholders, not legal values. Say so up front.
 - Nothing here has been tested on a real tablet, printer or phone.
+
+## Sharing it over the internet (Cloudflare quick tunnels)
+Lets someone outside your network test everything, over HTTPS, with no router or firewall changes.
+```bash
+./tunnel.sh          # opens 5 tunnels (API + 4 apps), rebuilds the web apps to use them, prints the links
+./tunnel.sh stop     # closes the tunnels and goes back to the LAN addresses
+```
+- Needs `cloudflared` installed and the stack already running (see "Setting up on a new machine"). The first start takes a few minutes while the apps rebuild.
+- The links are random and change every start; they are also saved in `.tunnel/urls.txt`. Your PC must stay on and connected while they test.
+- **Anyone with the links can sign in** with the demo passwords. Share them privately, and run `./tunnel.sh stop` when finished. For anything longer than a test, use a named tunnel with your own domain and change the passwords (`SEED_PASSWORD`).
+- Each person can use the same demo logins at the same time; data they create is shared and lives in your database.
+- Over HTTPS the POS offline start-up cache works too, and the tablet app/printer features still need the native app.
