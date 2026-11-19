@@ -44,6 +44,7 @@ export default function Offboarding() {
               <Button disabled={initiate.isPending}>Initiate</Button>
             </form>
           </Card>
+          <Clearance />
         </div>
         <div className="lg:col-span-3">{sel ? <Detail id={sel} /> : <Card><Empty>Select an offboarding case.</Empty></Card>}</div>
       </div>
@@ -106,5 +107,25 @@ function Detail({ id }: { id: string }) {
         {act.isSuccess && <p className="mt-2 text-xs text-slate-500">Approval requests are decided on the Approvals screen; return here afterwards.</p>}
       </Card>
     </div>
+  );
+}
+
+function Clearance() {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ['clearance-items'], queryFn: () => api<any[]>('/offboarding/clearance-items') });
+  const [label, setLabel] = useState('');
+  const save = useMutation({ mutationFn: (x: any) => api('/offboarding/clearance-items', { body: x }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['clearance-items'] }); setLabel(''); } });
+  return (
+    <Card title="Exit clearance checklist (company-defined)">
+      <ErrorBox error={q.error ?? save.error} />
+      {q.data?.map((c) => (
+        <div key={c.id} className={`flex items-center justify-between py-1 text-sm ${c.active ? '' : 'text-slate-400 line-through'}`}>{c.label}
+          <Button variant="ghost" onClick={() => save.mutate({ key: c.key, label: c.label, sortOrder: c.sortOrder, active: !c.active })}>{c.active ? 'Turn off' : 'Turn on'}</Button></div>
+      ))}
+      <form className="mt-2 flex items-end gap-2" onSubmit={(e) => { e.preventDefault(); save.mutate({ key: label, label, sortOrder: 100 }); }}>
+        <Field label="New item"><Input required minLength={2} value={label} onChange={(e) => setLabel(e.target.value)} /></Field><Button disabled={save.isPending}>Add</Button>
+      </form>
+      <p className="mt-2 text-xs text-slate-500">Applies to offboardings started from now on; open cases keep their list.</p>
+    </Card>
   );
 }

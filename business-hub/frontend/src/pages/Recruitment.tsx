@@ -16,10 +16,10 @@ export default function Recruitment() {
   return (
     <div>
       <PageHeader title="Recruitment" subtitle="Vacancies, screening on objective criteria, AI-assisted interviews with human review, and appeals." />
-      <Tabs tabs={['Setup', 'Vacancies', 'Pipeline', 'Appeals']} value={tab} onChange={setTab} />
+      <Tabs tabs={['Setup', 'Vacancies', 'Applicants', 'Appeals']} value={tab} onChange={setTab} />
       {tab === 'Setup' && <Setup />}
       {tab === 'Vacancies' && <Vacancies />}
-      {tab === 'Pipeline' && <Pipeline />}
+      {tab === 'Applicants' && <Pipeline />}
       {tab === 'Appeals' && <Appeals />}
     </div>
   );
@@ -50,12 +50,13 @@ function Setup() {
     onSuccess: () => { refresh(); setCriteria([]); },
   });
   const defTpl = useMutation({ mutationFn: (language: string) => api('/recruitment/interview-templates/default', { body: { language } }), onSuccess: refresh });
+  const setTpl = useMutation({ mutationFn: (x: { id: string; interviewTemplateId: string }) => api(`/recruitment/positions/${x.id}`, { method: 'PATCH', body: { interviewTemplateId: x.interviewTemplateId } }), onSuccess: refresh });
   const [b, setB] = useState({ branchId: '', positionId: '', approved: '' });
   const setBudget = useMutation({ mutationFn: () => api('/recruitment/budgets', { method: 'PUT', body: { branchId: b.branchId, positionId: b.positionId, approved: Number(b.approved) } }), onSuccess: refresh });
 
   return (
     <div className="space-y-6">
-      <ErrorBox error={create.error ?? defTpl.error ?? setBudget.error} />
+      <ErrorBox error={create.error ?? defTpl.error ?? setBudget.error ?? setTpl.error} />
       <Card title="Positions">
         <Table head={['Title', 'Pay band (JOD)', 'Skills', 'Criteria', 'Template']}>
           {positions.data?.map((x) => (
@@ -64,7 +65,12 @@ function Setup() {
               <td className="px-3 py-2">{Number(x.payBandMin).toFixed(3)} - {Number(x.payBandMax).toFixed(3)}</td>
               <td className="px-3 py-2 text-xs">{(x.requiredSkills as string[]).join(', ')}</td>
               <td className="px-3 py-2 text-xs">{(x.eligibilityCriteria as any[]).map((c) => c.type).join(', ') || '-'}</td>
-              <td className="px-3 py-2 text-xs">{nameOf(templates.data, x.interviewTemplateId ?? '') || '-'}</td>
+              <td className="px-3 py-2 text-xs">
+                <Select value={x.interviewTemplateId ?? ''} onChange={(e) => setTpl.mutate({ id: x.id, interviewTemplateId: e.target.value })}>
+                  <option value="" disabled>{templates.data?.length ? 'Newest template (default)' : 'No template yet'}</option>
+                  {templates.data?.filter((t) => t.active !== false).map((t) => <option key={t.id} value={t.id}>{t.name} ({t.language})</option>)}
+                </Select>
+              </td>
             </tr>
           ))}
         </Table>
@@ -78,7 +84,7 @@ function Setup() {
             <Field label="Pay band max (JOD)"><Input type="number" step="0.001" value={p.payBandMax} onChange={(e) => setP({ ...p, payBandMax: e.target.value })} required /></Field>
             <Field label="Required skills (comma separated)"><Input value={p.skills} onChange={(e) => setP({ ...p, skills: e.target.value })} /></Field>
             <Field label="Required documents"><Input value={p.docs} onChange={(e) => setP({ ...p, docs: e.target.value })} /></Field>
-            <Field label="Training modules (comma separated)"><Input value={p.training} onChange={(e) => setP({ ...p, training: e.target.value })} /></Field>
+            <Field label="Training for new hires (names of Training & SOPs items, comma separated)"><Input value={p.training} onChange={(e) => setP({ ...p, training: e.target.value })} /></Field>
             <Field label="Interview template">
               <Select value={p.template} onChange={(e) => setP({ ...p, template: e.target.value })}>
                 <option value="">None</option>
@@ -102,7 +108,7 @@ function Setup() {
         </Card>
         <div className="space-y-6">
           <Card title="Interview templates">
-            <ul className="mb-3 space-y-1 text-sm">{templates.data?.map((t) => <li key={t.id}>{t.name} <Badge>{t.language}</Badge> v{t.version}</li>)}</ul>
+            <ul className="mb-3 space-y-1 text-sm">{templates.data?.map((t) => <li key={t.id}>{t.name} <Badge>{t.language}</Badge> v{t.version} <span className="text-xs text-slate-500">{(t.questions as any[]).length} questions</span></li>)}</ul>
             <div className="flex gap-2">
               <Button variant="ghost" onClick={() => defTpl.mutate('en')}>Create default (en)</Button>
               <Button variant="ghost" onClick={() => defTpl.mutate('ar')}>Create default (ar)</Button>
@@ -119,7 +125,76 @@ function Setup() {
           </Card>
         </div>
       </div>
+      <TemplateEditor templates={templates.data ?? []} onSaved={refresh} />
     </div>
+  );
+}
+
+type TplForm = { name: string; language: string; scaleMax: string; advance: string; review: string; comps: { key: string; name: string; weight: string; keywords: string }[]; qs: { text: string; textAr: string; competency: string; minWords: string }[] };
+const blankTpl = (): TplForm => ({ name: '', language: 'en', scaleMax: '5', advance: '3.5', review: '2.5', comps: [{ key: 'service', name: 'Customer service', weight: '1', keywords: '' }], qs: [{ text: '', textAr: '', competency: 'service', minWords: '15' }] });
+
+function TemplateEditor({ templates, onSaved }: { templates: any[]; onSaved: () => void }) {
+  const [f, setF] = useState<TplForm>(blankTpl());
+  const fromTemplate = (id: string) => {
+    const t = templates.find((x) => x.id === id);
+    if (!t) return setF(blankTpl());
+    setF({
+      name: `${t.name} (copy)`, language: t.language, scaleMax: String(t.rubric.scale.max), advance: String(t.rubric.thresholds.advance), review: String(t.rubric.thresholds.review),
+      comps: t.rubric.competencies.map((c: any) => ({ key: c.key, name: c.name, weight: String(c.weight), keywords: (c.keywords ?? []).join(', ') })),
+      qs: (t.questions as any[]).map((q) => ({ text: q.text, textAr: q.textAr ?? '', competency: q.competency, minWords: String(q.minWords ?? '') })),
+    });
+  };
+  const save = useMutation({
+    mutationFn: () => api('/recruitment/interview-templates', { body: {
+      name: f.name, language: f.language,
+      questions: f.qs.map((q, i) => ({ id: `q${i + 1}`, text: q.text, ...(q.textAr && { textAr: q.textAr }), competency: q.competency, ...(q.minWords && { minWords: Number(q.minWords) }) })),
+      rubric: { scale: { min: 0, max: Number(f.scaleMax) }, thresholds: { advance: Number(f.advance), review: Number(f.review) }, maxFollowUps: 2, competencies: f.comps.map((c) => ({ key: c.key.trim(), name: c.name || c.key, weight: Number(c.weight), keywords: csv(c.keywords) })) },
+    } }),
+    onSuccess: () => { setF(blankTpl()); onSaved(); },
+  });
+  const setComp = (i: number, k: string, v: string) => setF({ ...f, comps: f.comps.map((c, j) => (j === i ? { ...c, [k]: v } : c)) });
+  const setQ = (i: number, k: string, v: string) => setF({ ...f, qs: f.qs.map((q, j) => (j === i ? { ...q, [k]: v } : q)) });
+  return (
+    <Card title="Create an interview template">
+      <ErrorBox error={save.error} />
+      {save.isSuccess && <p className="mb-2 text-sm text-emerald-700">Template saved. Pick it for a position in the table above.</p>}
+      <form className="space-y-4" onSubmit={(e: FormEvent) => { e.preventDefault(); save.mutate(); }}>
+        <div className="grid gap-3 md:grid-cols-4">
+          <Field label="Name"><Input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} required /></Field>
+          <Field label="Language"><Select value={f.language} onChange={(e) => setF({ ...f, language: e.target.value })}><option value="en">English</option><option value="ar">Arabic</option></Select></Field>
+          <Field label="Start from"><Select value="" onChange={(e) => fromTemplate(e.target.value)}><option value="">Blank</option>{templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</Select></Field>
+          <Field label="Scale (0 to)"><Input type="number" min="1" value={f.scaleMax} onChange={(e) => setF({ ...f, scaleMax: e.target.value })} required /></Field>
+          <Field label="Advance at score"><Input type="number" step="0.1" value={f.advance} onChange={(e) => setF({ ...f, advance: e.target.value })} required /></Field>
+          <Field label="Review at score"><Input type="number" step="0.1" value={f.review} onChange={(e) => setF({ ...f, review: e.target.value })} required /></Field>
+        </div>
+        <div>
+          <div className="mb-1 text-xs font-medium text-slate-600">Competencies (what the answers are scored on)</div>
+          {f.comps.map((c, i) => (
+            <div key={i} className="mb-2 grid gap-2 md:grid-cols-5">
+              <Input placeholder="key, e.g. teamwork" value={c.key} onChange={(e) => setComp(i, 'key', e.target.value)} required />
+              <Input placeholder="Name" value={c.name} onChange={(e) => setComp(i, 'name', e.target.value)} />
+              <Input type="number" step="0.1" min="0.1" placeholder="Weight" value={c.weight} onChange={(e) => setComp(i, 'weight', e.target.value)} required />
+              <Input className="md:col-span-1" placeholder="Keywords, comma separated" value={c.keywords} onChange={(e) => setComp(i, 'keywords', e.target.value)} />
+              <Button type="button" variant="ghost" disabled={f.comps.length < 2} onClick={() => setF({ ...f, comps: f.comps.filter((_, j) => j !== i) })}>Remove</Button>
+            </div>
+          ))}
+          <Button type="button" variant="ghost" onClick={() => setF({ ...f, comps: [...f.comps, { key: '', name: '', weight: '1', keywords: '' }] })}>Add competency</Button>
+        </div>
+        <div>
+          <div className="mb-1 text-xs font-medium text-slate-600">Questions (every candidate gets the same ones)</div>
+          {f.qs.map((q, i) => (
+            <div key={i} className="mb-2 grid gap-2 md:grid-cols-6">
+              <Input className="md:col-span-2" placeholder={`Question ${i + 1}`} value={q.text} onChange={(e) => setQ(i, 'text', e.target.value)} required />
+              <Input className="md:col-span-2" placeholder="Arabic text (optional)" value={q.textAr} onChange={(e) => setQ(i, 'textAr', e.target.value)} />
+              <Select value={q.competency} onChange={(e) => setQ(i, 'competency', e.target.value)}>{f.comps.filter((c) => c.key.trim()).map((c) => <option key={c.key} value={c.key.trim()}>{c.key}</option>)}</Select>
+              <div className="flex gap-1"><Input type="number" min="0" placeholder="Min words" value={q.minWords} onChange={(e) => setQ(i, 'minWords', e.target.value)} /><Button type="button" variant="ghost" disabled={f.qs.length < 2} onClick={() => setF({ ...f, qs: f.qs.filter((_, j) => j !== i) })}>x</Button></div>
+            </div>
+          ))}
+          <Button type="button" variant="ghost" onClick={() => setF({ ...f, qs: [...f.qs, { text: '', textAr: '', competency: f.comps[0]?.key.trim() ?? '', minWords: '15' }] })}>Add question</Button>
+        </div>
+        <Button type="submit" disabled={save.isPending}>Save template</Button>
+      </form>
+    </Card>
   );
 }
 
@@ -199,35 +274,49 @@ function Vacancies() {
 
 function Pipeline() {
   const vacancies = useList('/recruitment/vacancies');
+  const branches = useList('/org/branches');
   const [vacancyId, setVacancyId] = useState('');
   const [status, setStatus] = useState('');
+  const [search, setSearch] = useState('');
   const [sel, setSel] = useState<string | null>(null);
   const q = new URLSearchParams({ ...(vacancyId && { vacancyId }), ...(status && { status }) }).toString();
   const list = useQuery({ queryKey: ['apps', q], queryFn: () => api<any[]>(`/recruitment/applications?${q}`) });
+  const needle = search.trim().toLowerCase();
+  const rows = list.data?.filter((a) => !needle || [a.candidate, a.phone, a.email, a.position, a.vacancy].some((v) => String(v ?? '').toLowerCase().includes(needle)));
   return (
-    <div className="grid gap-6 lg:grid-cols-5">
-      <Card className="lg:col-span-2">
-        <div className="mb-3 flex gap-2">
+    <div className="space-y-6">
+      <Card>
+        <div className="mb-3 grid gap-2 md:grid-cols-4">
+          <Input placeholder="Search name, phone, email, position" value={search} onChange={(e) => setSearch(e.target.value)} />
           <Select value={vacancyId} onChange={(e) => setVacancyId(e.target.value)}><option value="">All vacancies</option>{vacancies.data?.map((x) => <option key={x.id} value={x.id}>{x.number}</option>)}</Select>
           <Select value={status} onChange={(e) => setStatus(e.target.value)}>
             <option value="">All statuses</option>
             {['INCOMPLETE', 'SCREENED_OUT', 'SCREENED', 'INTERVIEW_INVITED', 'INTERVIEW_SCHEDULED', 'UNDER_REVIEW', 'ADVANCED', 'OFFER_PENDING', 'ONBOARDING', 'HIRED', 'REJECTED', 'WITHDRAWN'].map((s) => <option key={s}>{s}</option>)}
           </Select>
+          <div className="self-center text-sm text-slate-500">{rows?.length ?? 0} applicants</div>
         </div>
         <ErrorBox error={list.error} />
-        {list.data?.length === 0 ? <Empty>No applications.</Empty> : (
-          <Table head={['Candidate', 'Vacancy', 'Status']}>
-            {list.data?.map((a) => (
+        {rows?.length === 0 ? <Empty>No applicants.</Empty> : (
+          <Table head={['Applicant', 'Phone', 'Email', 'Position', 'Branch', 'Vacancy', 'Applied', 'Screening', 'Interview', 'AI score', 'Status']}>
+            {rows?.map((a) => (
               <tr key={a.id} onClick={() => setSel(a.id)} className={`cursor-pointer hover:bg-slate-50 ${sel === a.id ? 'bg-brand-50' : ''}`}>
                 <td className="px-3 py-2 font-medium">{a.candidate}</td>
+                <td className="px-3 py-2 text-xs">{a.phone}</td>
+                <td className="px-3 py-2 text-xs">{a.email ?? '-'}</td>
+                <td className="px-3 py-2 text-xs">{a.position}</td>
+                <td className="px-3 py-2 text-xs">{nameOf(branches.data, a.branchId)}</td>
                 <td className="px-3 py-2 text-xs">{a.vacancy}</td>
+                <td className="px-3 py-2 text-xs">{formatDate(a.createdAt)}</td>
+                <td className="px-3 py-2 text-xs">{a.screening ? `${a.screening} met` : '-'}</td>
+                <td className="px-3 py-2">{a.interview ? <StatusBadge status={a.interview} /> : '-'}</td>
+                <td className="px-3 py-2 text-xs">{a.score != null ? `${a.score} ${a.recommendation}` : '-'}</td>
                 <td className="px-3 py-2"><StatusBadge status={a.status} /></td>
               </tr>
             ))}
           </Table>
         )}
       </Card>
-      <div className="lg:col-span-3">{sel ? <ApplicationDetail id={sel} /> : <Card><Empty>Select an application. Opening a candidate file is audited.</Empty></Card>}</div>
+      {sel ? <ApplicationDetail id={sel} /> : <Card><Empty>Select an applicant to see their file. Opening a candidate file is audited.</Empty></Card>}
     </div>
   );
 }
@@ -264,7 +353,7 @@ function ApplicationDetail({ id }: { id: string }) {
         <div className="mb-2 flex items-center gap-2"><StatusBadge status={a.status} />{a.decidedBy && <span className="text-xs text-slate-500">decided by {a.decidedBy}</span>}{a.humanInterviewRequested && <Badge tone="MEDIUM">human interview requested</Badge>}</div>
         <p className="text-sm text-slate-600">{a.candidate.phone} {a.candidate.email}</p>
         <p className="text-xs text-slate-400">Data kept until {formatDate(a.candidate.retentionUntil)}</p>
-        <pre className="mt-2 max-h-32 overflow-auto rounded bg-slate-50 p-2 text-xs">{JSON.stringify(a.intake, null, 2)}</pre>
+        <dl className="mt-2 grid gap-x-4 gap-y-1 rounded bg-slate-50 p-2 text-xs md:grid-cols-2">{Object.entries(a.intake ?? {}).map(([k, v]) => <div key={k}><dt className="inline font-medium text-slate-600">{k.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase())}: </dt><dd className="inline">{Array.isArray(v) ? v.join(', ') : typeof v === 'object' && v ? JSON.stringify(v) : String(v)}</dd></div>)}</dl>
       </Card>
       <Card title="Screening (objective criteria)">
         {(a.eligibility as any[]).length === 0 ? <Empty>No screening results.</Empty> : (

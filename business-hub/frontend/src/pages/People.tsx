@@ -60,14 +60,15 @@ function EmployeeDetail({ id }: { id: string }) {
   const [sens, setSens] = useState<any>(null);
   const [asg, setAsg] = useState({ branchId: '', validFrom: '', isPrimary: false });
   const [con, setCon] = useState({ effectiveDate: '', salaryBasic: '', weeklyHours: '' });
-  const [trainTitle, setTrainTitle] = useState('');
+  const [trainItem, setTrainItem] = useState('');
+  const library = useQuery({ queryKey: ['lib'], queryFn: () => api<any[]>('/ops/library'), retry: false });
   const refresh = () => qc.invalidateQueries();
   const sensitive = useMutation({ mutationFn: () => api(`/employees/${id}/sensitive`), onSuccess: setSens });
   const addAsg = useMutation({ mutationFn: () => api(`/employees/${id}/assignments`, { body: { branchId: asg.branchId, validFrom: asg.validFrom, isPrimary: asg.isPrimary } }), onSuccess: refresh });
   const endAsg = useMutation({ mutationFn: (aid: string) => api(`/employees/${id}/assignments/${aid}/end`, { body: {} }), onSuccess: refresh });
   const newCon = useMutation({ mutationFn: () => api(`/employees/${id}/contracts`, { body: { effectiveDate: con.effectiveDate, salaryBasic: Number(con.salaryBasic), weeklyHours: con.weeklyHours ? Number(con.weeklyHours) : undefined } }), onSuccess: refresh });
   const doneTr = useMutation({ mutationFn: (tid: string) => api(`/training/${tid}/complete`, { method: 'POST' }), onSuccess: refresh });
-  const addTr = useMutation({ mutationFn: () => api(`/employees/${id}/training`, { body: { title: trainTitle, mandatory: true } }), onSuccess: () => { setTrainTitle(''); refresh(); } });
+  const addTr = useMutation({ mutationFn: () => api(`/employees/${id}/training`, { body: { itemId: trainItem } }), onSuccess: () => { setTrainItem(''); refresh(); } });
   const e = emp.data;
   if (!e) return <Card><ErrorBox error={emp.error} />{emp.isLoading && <Empty>Loading...</Empty>}</Card>;
   const mine = ssc.data?.filter((a) => a.employeeId === id) ?? [];
@@ -129,13 +130,13 @@ function EmployeeDetail({ id }: { id: string }) {
             {training.data?.map((t) => (
               <li key={t.id} className="flex items-center justify-between">
                 <span>{t.title} {t.mandatory && <Badge>mandatory</Badge>} {t.dueDate && <span className="text-xs text-slate-500">due {formatDate(t.dueDate)}</span>}</span>
-                {t.status === 'DONE' ? <StatusBadge status="DONE" /> : <Button variant="ghost" onClick={() => doneTr.mutate(t.id)}>Mark done</Button>}
+                {t.itemCode || t.status === 'DONE' ? <StatusBadge status={t.status} /> : <Button variant="ghost" onClick={() => doneTr.mutate(t.id)}>Mark done (old item, no exam)</Button>}
               </li>
             ))}
           </ul>
         )}
         <form className="mt-3 flex gap-2" onSubmit={(ev: FormEvent) => { ev.preventDefault(); addTr.mutate(); }}>
-          <Input placeholder="Assign training" value={trainTitle} onChange={(ev) => setTrainTitle(ev.target.value)} required />
+          <Select required value={trainItem} onChange={(ev) => setTrainItem(ev.target.value)}><option value="">Assign training (has an exam)...</option>{library.data?.map((i) => <option key={i.id} value={i.id}>{i.title} v{i.version}</option>)}</Select>
           <Button type="submit">Assign</Button>
         </form>
       </Card>
