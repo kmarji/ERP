@@ -20,6 +20,9 @@ const POLICIES: { key: string; riskTier: 'LOW' | 'MEDIUM' | 'HIGH' | 'REGULATED'
   { key: 'leave.approve', riskTier: 'LOW', rules: { maxAutoAmount: 0 } },
   { key: 'time.correction', riskTier: 'LOW', rules: { maxAutoAmount: 30 } },
   { key: 'offboarding.settlement', riskTier: 'HIGH', rules: {} },
+  { key: 'ops.settings', riskTier: 'LOW', rules: { criticalActionDays: 3, actionDays: 14, foodSafetyActionHours: 24 } }, // A60: due dates for generated corrective actions
+  { key: 'discipline.settings', riskTier: 'LOW', rules: { maxDeductionDays: 1 } }, // placeholder cap on one disciplinary deduction, in days of basic salary; not legally verified
+  { key: 'schedule.approval', riskTier: 'LOW', rules: { required: false } }, // true: new shifts wait for a manager's approval
   { key: 'payroll.adjustment', riskTier: 'LOW', rules: { maxAutoAmount: 50 } },
   { key: 'menu.price_change', riskTier: 'LOW', rules: { maxVariancePct: 10 } },
   { key: 'pos.discount', riskTier: 'LOW', rules: { maxVariancePct: 10 } },

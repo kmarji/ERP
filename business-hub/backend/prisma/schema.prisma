@@ -52,6 +52,10 @@ model Branch {
   name          String
   active        Boolean  @default(true)
   createdAt     DateTime @default(now())
+  // Attendance geofence; null = not enforced for this branch.
+  latitude      Decimal? @db.Decimal(9, 6)
+  longitude     Decimal? @db.Decimal(9, 6)
+  geofenceM     Int?
 
   tenant         Tenant          @relation(fields: [tenantId], references: [id])
   legalEntity    LegalEntity     @relation(fields: [legalEntityId], references: [id])
@@ -2248,7 +2252,11 @@ model SscAction {
 
 enum AssignmentStatus {
   ASSIGNED
-  DONE
+  IN_PROGRESS
+  EXAM_PENDING
+  PASSED
+  FAILED
+  DONE // legacy title-only assignments completed by hand
 }
 
 model TrainingAssignment {
@@ -2260,6 +2268,13 @@ model TrainingAssignment {
   dueDate     DateTime?        @db.Date
   status      AssignmentStatus @default(ASSIGNED)
   completedAt DateTime?
+  // Library-based assignments (A52): passing the exam is the only way to complete them.
+  libraryItemId String?
+  itemCode      String?
+  attempts      Int     @default(0)
+  bestScore     Int?
+  source        String  @default("MANUAL") // MANUAL | AUTO
+  assignedBy    String?
 }
 
 model UserInvite {
@@ -2295,8 +2310,10 @@ model ShiftSchedule {
   templateId String?
   status     String   @default("PUBLISHED") // PUBLISHED | CANCELLED | LEAVE_CONFLICT
   notes      String?
+  restOverrideReason String?
   createdBy  String
   createdAt  DateTime @default(now())
+  noShowAt   DateTime? // set once when the no-show exception is raised
 
   @@index([tenantId, employeeId, date])
   @@index([tenantId, branchId, date])
@@ -2592,4 +2609,357 @@ model Offboarding {
   initiatedBy          String
   completedAt          DateTime?
   createdAt            DateTime          @default(now())
+}
+
+enum DisciplineStatus {
+  REPORTED
+  UNDER_REVIEW
+  EMPLOYEE_RESPONSE
+  DECISION_PENDING
+  APPROVED
+  DISMISSED
+  NOTIFIED
+  APPEALED
+  CLOSED
+}
+
+// Blueprint A25-A30. An incident is an allegation, never a finding; nothing here terminates anyone.
+model DisciplinaryCase {
+  id               String           @id @default(uuid())
+  tenantId         String
+  number           String
+  employeeId       String
+  category         String // ATTENDANCE | CONDUCT | SAFETY | POLICY
+  description      String
+  incidentDate     DateTime         @db.Date
+  evidenceDocIds   Json             @default("[]")
+  reportedBy       String
+  status           DisciplineStatus @default(REPORTED)
+  employeeResponse String?
+  respondedAt      DateTime?
+  sanction         String? // VERBAL | WRITTEN | FINAL | FINE | NONE
+  fineAmount       Decimal?         @db.Decimal(18, 3)
+  legalBasis       String?
+  decisionNote     String?
+  decidedBy        String?
+  decidedAt        DateTime?
+  notifiedAt       DateTime?
+  acknowledgedAt   DateTime?
+  appealText       String?
+  appealOutcome    String? // UPHELD | OVERTURNED
+  appealDecidedBy  String?
+  expiresAt        DateTime?        @db.Date
+  createdAt        DateTime         @default(now())
+
+  @@unique([tenantId, number])
+  @@index([tenantId, employeeId])
+}
+
+// A19: manager publishes an unassigned shift; eligible employees request; manager assigns one.
+model OpenShift {
+  id         String   @id @default(uuid())
+  tenantId   String
+  branchId   String
+  date       DateTime @db.Date
+  startAt    DateTime
+  endAt      DateTime
+  templateId String?
+  status     String   @default("OPEN") // OPEN | FILLED | CANCELLED
+  scheduleId String? // the shift created on assignment
+  notes      String?
+  createdBy  String
+  createdAt  DateTime @default(now())
+
+  requests OpenShiftRequest[]
+
+  @@index([tenantId, branchId, status])
+}
+
+model OpenShiftRequest {
+  id          String   @id @default(uuid())
+  tenantId    String
+  openShiftId String
+  employeeId  String
+  status      String   @default("PENDING") // PENDING | ASSIGNED | REJECTED
+  createdAt   DateTime @default(now())
+
+  openShift OpenShift @relation(fields: [openShiftId], references: [id], onDelete: Cascade)
+
+  @@unique([openShiftId, employeeId])
+}
+
+// A25: company-defined disciplinary categories. Empty table = the four defaults are created on first use.
+model DisciplineCategory {
+  id           String  @id @default(uuid())
+  tenantId     String
+  key          String
+  label        String
+  expiryMonths Int? // a decided case expires this long after the decision unless HR sets a date
+  active       Boolean @default(true)
+
+  @@unique([tenantId, key])
+}
+
+// A25: the company's own warning ladder (first, second, final warning, or whatever it uses). Order drives the suggested next step.
+model DisciplineAction {
+  id                String  @id @default(uuid())
+  tenantId          String
+  key               String
+  label             String
+  step              Int // 1 = first step on the ladder; actions that do not count as a warning use 0
+  countsAsWarning   Boolean @default(true)
+  defaultDeduction  Decimal? @db.Decimal(18, 3) // prefilled when HR picks this action; the decision can change it
+  active            Boolean @default(true)
+
+  @@unique([tenantId, key])
+}
+
+// A44: company-defined exit clearance items copied onto each new offboarding case.
+model ClearanceItem {
+  id        String  @id @default(uuid())
+  tenantId  String
+  key       String
+  label     String
+  sortOrder Int     @default(0)
+  active    Boolean @default(true)
+
+  @@unique([tenantId, key])
+}
+
+// ============================================================ OPERATIONS: checklists (A48-A50, E12-E13)
+
+// Editing a template creates the next version; runs keep pointing at the version they were issued from.
+model ChecklistTemplate {
+  id          String   @id @default(uuid())
+  tenantId    String
+  code        String // stable across versions
+  version     Int      @default(1)
+  name        String
+  branchId    String? // null = applies to every branch
+  items       Json // [{id, label, critical, evidenceRequired}]
+  attachments Json     @default("[]") // [{id, filename, mimeType, sizeBytes}] guides, example photos, videos
+  active      Boolean  @default(true)
+  createdBy   String
+  createdAt   DateTime @default(now())
+
+  @@unique([tenantId, code, version])
+}
+
+model ChecklistAssignment {
+  id         String    @id @default(uuid())
+  tenantId   String
+  templateId String
+  employeeId String
+  branchId   String
+  recurrence String // DAILY | WEEKLY
+  weekday    Int? // 0=Sun..6=Sat, WEEKLY only
+  dueTime    String // HH:mm Amman, "complete by"
+  startDate  DateTime  @db.Date
+  endDate    DateTime? @db.Date
+  active     Boolean   @default(true)
+  createdBy  String
+  createdAt  DateTime  @default(now())
+
+  @@index([tenantId, active])
+}
+
+model ChecklistRun {
+  id               String    @id @default(uuid())
+  tenantId         String
+  templateId       String
+  assignmentId     String? // null = unscheduled (manager request)
+  forDate          DateTime  @db.Date
+  employeeId       String
+  branchId         String
+  dueAt            DateTime
+  status           String    @default("PENDING") // PENDING | COMPLETED | OVERDUE | REVIEWED
+  note             String?
+  results          Json? // [{itemId, ok, note, docId, value}]
+  criticalFailures Int       @default(0)
+  completedAt      DateTime?
+  completedLate    Boolean   @default(false)
+  clientCompletedAt DateTime? // when it was done on the device, if offline
+  reviewedBy       String?
+  reviewedAt       DateTime?
+  createdBy        String
+  createdAt        DateTime  @default(now())
+
+  @@unique([assignmentId, forDate])
+  @@index([tenantId, branchId, status, dueAt])
+  @@index([tenantId, employeeId, status])
+}
+
+// ============================================================ OPERATIONS: SOPs, training, exams (A51-A55, E14-E16)
+
+// Version-controlled SOP or training material; the exam settings travel with each version.
+model LibraryItem {
+  id                  String   @id @default(uuid())
+  tenantId            String
+  code                String
+  version             Int      @default(1)
+  kind                String // SOP | TRAINING
+  title               String
+  body                String   @db.Text
+  docId               String? // legacy single attachment; use attachments
+  attachments         Json     @default("[]") // [{id, filename, mimeType, sizeBytes}] uploaded study material (any format)
+  passScore           Int      @default(80) // percent
+  maxAttempts         Int      @default(3)
+  questionsPerAttempt Int      @default(5)
+  active              Boolean  @default(true)
+  createdBy           String
+  createdAt           DateTime @default(now())
+
+  @@unique([tenantId, code, version])
+}
+
+// Questions belong to the item code, so a new SOP version reuses the approved bank.
+model QuestionBankItem {
+  id           String    @id @default(uuid())
+  tenantId     String
+  itemCode     String
+  text         String
+  options      Json // string[]
+  correctIndex Int
+  status       String    @default("DRAFT") // DRAFT | APPROVED | REJECTED
+  source       String // MANUAL | adapter name for generated ones
+  createdBy    String
+  approvedBy   String?
+  approvedAt   DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@index([tenantId, itemCode, status])
+}
+
+model TrainingRule {
+  id         String  @id @default(uuid())
+  tenantId   String
+  positionId String
+  itemCode   String
+  dueDays    Int     @default(30)
+  active     Boolean @default(true)
+  createdBy  String
+
+  @@unique([tenantId, positionId, itemCode])
+}
+
+model ExamAttempt {
+  id           String    @id @default(uuid())
+  tenantId     String
+  assignmentId String
+  employeeId   String
+  questions    Json // [{id, text, options (shuffled), correctIndex}]: never sent to the employee with the answers
+  answers      Json?
+  score        Int?
+  passed       Boolean?
+  startedAt    DateTime  @default(now())
+  submittedAt  DateTime?
+
+  @@index([tenantId, assignmentId])
+}
+
+model EmployeeEvaluation {
+  id          String   @id @default(uuid())
+  tenantId    String
+  employeeId  String
+  evaluatorId String
+  topic       String
+  rating      Int // 1-5
+  notes       String?
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId, employeeId])
+}
+
+// ============================================================ OPERATIONS: audits, food safety, corrective actions (A56-A59)
+
+model AuditTemplate {
+  id          String   @id @default(uuid())
+  tenantId    String
+  code        String
+  version     Int      @default(1)
+  name        String
+  branchId    String?
+  items       Json // [{id, label, weight, critical, evidenceRequired}]
+  passPercent Int      @default(80)
+  active      Boolean  @default(true)
+  createdBy   String
+  createdAt   DateTime @default(now())
+
+  @@unique([tenantId, code, version])
+}
+
+model AuditRecord {
+  id            String    @id @default(uuid())
+  tenantId      String
+  templateId    String
+  branchId      String
+  auditorId     String
+  status        String    @default("IN_PROGRESS") // IN_PROGRESS | COMPLETED
+  results       Json? // [{itemId, result: PASS|FAIL|NA, note, docId, actionId}]
+  scorePct      Int?
+  passed        Boolean?
+  criticalFails Int       @default(0)
+  startedAt     DateTime  @default(now())
+  completedAt   DateTime?
+
+  @@index([tenantId, branchId, status])
+}
+
+model FoodSafetyPoint {
+  id        String   @id @default(uuid())
+  tenantId  String
+  branchId  String
+  name      String
+  kind      String // FRIDGE | FREEZER | HOT_HOLD | COOKING | OTHER
+  unit      String   @default("C")
+  minValue  Decimal? @db.Decimal(8, 2)
+  maxValue  Decimal? @db.Decimal(8, 2)
+  active    Boolean  @default(true)
+  createdBy String
+
+  @@index([tenantId, branchId])
+}
+
+model FoodSafetyReading {
+  id       String   @id @default(uuid())
+  tenantId String
+  pointId  String
+  branchId String
+  value    Decimal  @db.Decimal(8, 2)
+  inRange  Boolean
+  takenBy  String
+  takenAt  DateTime @default(now())
+  note     String?
+  docId    String?
+  actionId String?
+
+  @@index([tenantId, pointId, takenAt])
+}
+
+model CorrectiveAction {
+  id                 String    @id @default(uuid())
+  tenantId           String
+  number             String
+  branchId           String
+  source             String // AUDIT | FOOD_SAFETY | MANUAL
+  sourceId           String? // audit id / food-safety point id
+  title              String
+  description        String?
+  severity           String    @default("MEDIUM") // LOW | MEDIUM | HIGH | CRITICAL
+  status             String    @default("OPEN") // OPEN | IN_PROGRESS | PENDING_VERIFICATION | CLOSED | CANCELLED
+  assigneeEmployeeId String?
+  dueAt              DateTime?
+  overdueAt          DateTime? // set once when the overdue exception is raised
+  completionNote     String?
+  evidenceDocIds     Json      @default("[]")
+  completedAt        DateTime?
+  verifiedBy         String?
+  verifiedAt         DateTime?
+  history            Json      @default("[]")
+  createdBy          String
+  createdAt          DateTime  @default(now())
+
+  @@unique([tenantId, number])
+  @@index([tenantId, branchId, status])
+  @@index([tenantId, source, sourceId])
 }

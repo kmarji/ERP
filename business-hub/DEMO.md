@@ -47,7 +47,7 @@ cd docker && docker compose up -d --build && cd ..
 ## Seeded data
 - **Users:** the six accounts above, three branches (Abdoun, Sweifieh, Irbid). **Menu:** 3 categories, 8 items. **POS tablet:** Demo Tablet 1 (Abdoun).
 - **Suppliers:** Jordan Dairy Co., Levant Coffee Roasters, Amman Mills, with 4 priced products (milk, espresso beans, flour, cups).
-- **People:** positions Barista and Cashier with headcount budgets, one open Barista vacancy (Abdoun), and 5 employees with contracts (Omar, Lina, Yousef, Rana, Tariq). Tariq has no bank account on purpose: payroll flags it as an exception, the rest appear in the bank file.
+- **People:** positions Barista and Cashier with headcount budgets, one open Barista vacancy (Abdoun), and 7 employees with contracts (Omar, Lina, Yousef, Rana, Tariq, plus Demo Owner and Demo HR). Omar, Yousef, Demo Owner and Demo HR are linked to the manager, cashier, owner and HR logins, so those four see data in My space. Tariq, Demo Owner and Demo HR have no bank account: payroll flags them as exceptions, the rest appear in the bank file.
 - **Online store:** enabled for Abdoun (pickup + delivery to Abdoun, Sweifieh, Jabal Amman, fee 1.000, minimum order 3.000) and Sweifieh (pickup only). Orders arrive in Online orders in the back-office for staff to accept.
 
 ## Suggested demo flow (about 10 minutes)
@@ -57,7 +57,7 @@ cd docker && docker compose up -d --build && cd ..
 4. **Back-office, owner:** Sales (the sale just made), Finance (journal entry it created), Owner home, Audit trail.
 5. **Exceptions and approvals:** big refund or discount by the cashier needs a manager; show Approvals as the manager. Routine work auto-completes, only exceptions reach a person.
 6. **Purchasing (WF-01):** as procurement, create a purchase request for milk or beans from the seeded suppliers and issue the order; as finance, show the three-way match and payables.
-7. **Payroll:** as HR, create a run for last month and calculate (5 employees, one missing-bank-account exception to acknowledge); finance reviews; the owner authorizes. Note that payroll cannot be finalized until the rule set is verified (Payroll, Rules).
+7. **Payroll:** as HR, create a run for last month and calculate (7 employees, three missing-bank-account exceptions to acknowledge); finance reviews; the owner authorizes. Note that payroll cannot be finalized until the rule set is verified (Payroll, Rules).
 
 ## Not demo-ready yet
 - **Tax:** menu items use tax code S16, a placeholder 16% rate (prices include tax). Say it is a placeholder.

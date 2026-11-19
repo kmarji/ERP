@@ -83,6 +83,7 @@ async function seedPeopleAndSupply(prisma: PrismaService, tenantId: string) {
     if (!(await db.jobPosition.count())) {
       const barista = await db.jobPosition.create({ data: { tenantId, title: 'Barista', titleAr: 'باريستا', payBandMin: 350, payBandMax: 500, requiredSkills: ['coffee'], trainingModules: [{ title: 'Food safety', mandatory: true, dueDays: 14 }] } });
       const cashier = await db.jobPosition.create({ data: { tenantId, title: 'Cashier', titleAr: 'كاشير', payBandMin: 300, payBandMax: 420 } });
+      for (const [title, titleAr] of [['Owner', 'المالك'], ['HR Officer', 'الموارد البشرية']]) await db.jobPosition.create({ data: { tenantId, title, titleAr, payBandMin: 800, payBandMax: 2000 } });
       await db.headcountBudget.create({ data: { tenantId, branchId: b1.id, positionId: barista.id, approved: 4 } });
       await db.headcountBudget.create({ data: { tenantId, branchId: b2.id, positionId: cashier.id, approved: 2 } });
       const number = await sequences.next('VAC', 'VAC');
@@ -99,20 +100,25 @@ async function seedPeopleAndSupply(prisma: PrismaService, tenantId: string) {
         ['Yousef Khalil', 'يوسف خليل', 'Cashier', b1.id, 380, 'JO94CBJO0010000000000131000303'],
         ['Rana Salem', 'رنا سالم', 'Cashier', b2.id, 360, 'JO94CBJO0010000000000131000304'],
         ['Tariq Mansour', 'طارق منصور', 'Barista', b2.id, 400, null], // no bank account: shows the payroll exception
+        ['Demo Owner', 'المالك', 'Owner', b1.id, 1500, null],
+        ['Demo HR', 'الموارد البشرية', 'HR Officer', b1.id, 900, null],
       ];
       const hire = new Date('2025-01-01');
+      // Demo logins that are also employees, so "My space" has something to show.
+      const login: Record<string, string> = { 'Yousef Khalil': 'cashier.amm1@demo.test', 'Omar Haddad': 'manager.amm1@demo.test', 'Demo Owner': 'owner@demo.test', 'Demo HR': 'hr@demo.test' };
       for (const [i, [name, nameAr, title, branchId, basic, iban]] of staff.entries()) {
         const number = await sequences.next('EMP', 'EMP');
         await db.employee.create({
           data: {
             tenantId, number, legalEntityId: entity.id, name, nameAr, phone: `07900000${10 + i}`, status: 'ACTIVE', hireDate: hire, positionId: pos(title),
+            userId: login[name] ? (await db.user.findFirst({ where: { email: login[name] } }))?.id : undefined,
             sensitive: iban ? crypto.encrypt({ iban }) : null,
             contracts: { create: { tenantId, version: 1, type: 'PERMANENT', startDate: hire, salaryBasic: basic, allowances: [{ name: 'Transport', amount: 30 }], weeklyHours: 48 } },
             assignments: { create: { tenantId, branchId, isPrimary: true, validFrom: hire } },
           },
         });
       }
-      console.log('seeded 5 employees with contracts (one without a bank account)');
+      console.log('seeded 7 employees with contracts (one without a bank account)');
     }
   });
 }
