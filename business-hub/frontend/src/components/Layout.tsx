@@ -1,7 +1,8 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
-import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { api, auth } from '../lib/api';
+import { flush, queue } from '../lib/offline';
 import { useI18n } from '../lib/i18n';
 import { NAV } from '../nav';
 import { ThemeButton } from '../theme';
@@ -13,6 +14,16 @@ export function Layout() {
   const main = useRef<HTMLElement>(null);
   // The menu and the page scroll separately; opening a page starts it at the top.
   useEffect(() => main.current?.scrollTo(0, 0), [pathname]);
+  const qc = useQueryClient();
+  // Offline checklists sync as soon as the connection is back, from any screen.
+  useEffect(() => {
+    const run = () => { if (queue.list().some((x) => !x.error) && navigator.onLine) flush().then((r) => { if (r.synced || r.already) qc.invalidateQueries({ queryKey: ['me-checklists'] }); }); };
+    run();
+    window.addEventListener('online', run);
+    const t = setInterval(run, 30_000);
+    return () => { window.removeEventListener('online', run); clearInterval(t); };
+  }, [qc]);
+  const unread = useQuery({ queryKey: ['notif-count'], queryFn: () => api<any[]>('/notifications').then((r) => r.filter((n) => !n.readAt).length), refetchInterval: 60_000, retry: false });
   const me = useQuery({ queryKey: ['me'], queryFn: () => api('/auth/me') });
   const items = NAV.filter((n) => !n.roles || me.data?.isSystem || me.data?.roles?.some((r: { key: string }) => n.roles!.includes(r.key)));
   const groups = [...new Set(items.map((n) => n.group))];
@@ -45,6 +56,7 @@ export function Layout() {
           <button className="rounded border border-slate-300 px-2 py-1 text-xs" onClick={() => setLang(lang === 'en' ? 'ar' : 'en')}>
             {lang === 'en' ? 'العربية' : 'English'}
           </button>
+          <Link to="/me?tab=Notifications" className="relative rounded border border-slate-300 px-2 py-1 text-xs" title="Notifications">🔔{!!unread.data && <span className="ms-1 rounded-full bg-red-600 px-1.5 text-white">{unread.data}</span>}</Link>
           <span className="text-slate-500">{me.data?.email}</span>
           <button
             className="text-brand-600 hover:underline"

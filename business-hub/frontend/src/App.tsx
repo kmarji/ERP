@@ -33,6 +33,13 @@ import Leave from './pages/Leave';
 import Payroll from './pages/Payroll';
 import PayrollRun from './pages/PayrollRun';
 import Offboarding from './pages/Offboarding';
+import Discipline from './pages/Discipline';
+import Checklists from './pages/Checklists';
+import Training from './pages/Training';
+import Audits from './pages/Audits';
+import FoodSafety from './pages/FoodSafety';
+import Actions from './pages/Actions';
+import OpsDashboard from './pages/OpsDashboard';
 import MySpace from './pages/MySpace';
 
 function Protected() {
@@ -74,6 +81,13 @@ export default function App() {
         <Route path="/payroll" element={<Payroll />} />
         <Route path="/payroll/runs/:id" element={<PayrollRun />} />
         <Route path="/offboarding" element={<Offboarding />} />
+        <Route path="/discipline" element={<Discipline />} />
+        <Route path="/checklists" element={<Checklists />} />
+        <Route path="/training" element={<Training />} />
+        <Route path="/audits" element={<Audits />} />
+        <Route path="/food-safety" element={<FoodSafety />} />
+        <Route path="/actions" element={<Actions />} />
+        <Route path="/operations" element={<OpsDashboard />} />
         <Route path="/me" element={<MySpace />} />
         <Route path="/policies" element={<Policies />} />
         <Route path="/audit" element={<Audit />} />
