@@ -10,6 +10,7 @@ import { ammanToday, dateOnly } from '../../common/time';
 import { currentContext, currentTenantId, RequestUser, runWithTenant } from '../../common/tenancy/tenant-context';
 import { AuditService } from '../audit/audit.service';
 import { DocumentsService } from '../documents/documents.module';
+import { LearningService } from '../operations/learning.service';
 import { NotificationsService } from '../notifications/notifications.module';
 import { PolicyService } from '../policy-engine/policy.service';
 import { CandidateNotifier } from '../recruitment/candidate-notifier';
@@ -40,6 +41,7 @@ export class OnboardingService {
     private readonly audit: AuditService,
     private readonly sequences: SequenceService,
     private readonly docs: DocumentsService,
+    private readonly learning: LearningService,
     private readonly notifier: CandidateNotifier,
     private readonly notifications: NotificationsService,
     private readonly crypto: FieldCrypto,
@@ -329,9 +331,6 @@ export class OnboardingService {
       });
       await tx.employeeAssignment.create({ data: { tenantId: '', employeeId: emp.id, branchId: branch.id, isPrimary: true, validFrom: offer.startDate } });
       await tx.employmentContract.create({ data: { tenantId: '', employeeId: emp.id, version: 1, type: offer.contractType, startDate: offer.startDate, endDate: offer.endDate, salaryBasic: offer.salaryBasic, allowances: offer.allowances as any, weeklyHours: offer.weeklyHours, probationMonths: offer.probationMonths, documentId: offer.contractDocId, signedAt: offer.candidateSignedAt } });
-      for (const m of (position.trainingModules as { title: string; mandatory?: boolean; dueDays?: number }[]) ?? []) {
-        await tx.trainingAssignment.create({ data: { tenantId: '', employeeId: emp.id, title: m.title, mandatory: m.mandatory ?? true, dueDate: new Date(offer.startDate.getTime() + (m.dueDays ?? 30) * 86_400_000) } });
-      }
       await tx.sscAction.create({ data: { tenantId: '', employeeId: emp.id, kind: 'REGISTRATION', payload: { employeeNumber: number, name: emp.name, hireDate: offer.startDate.toISOString().slice(0, 10), salaryBasic: offer.salaryBasic.toString(), position: position.title, employerTaxNumber: entity.taxNumber } } });
 
       if (app.candidate.email && !(await tx.user.findFirst({ where: { email: app.candidate.email.toLowerCase() } }))) {
@@ -354,6 +353,8 @@ export class OnboardingService {
       return emp.id;
     });
 
+    // After the hire commits: library items with a real exam. Modules that cannot be examined become HR tasks (criterion 10).
+    await this.learning.assignForHire(employeeId, (position.trainingModules as { title: string; itemCode?: string; dueDays?: number }[]) ?? [], offer.startDate);
     await this.advance(applicationId, 'onboarding_complete', 'HIRED');
     if (invited) {
       await this.notifier.send({ phone: app.candidate.phone, email: app.candidate.email, template: 'employee_invite', text: `Welcome! Set your password with this one-time code (valid 7 days): ${inviteToken}`, textAr: `مرحبا بك! رمز تعيين كلمة المرور: ${inviteToken}` });

@@ -44,14 +44,21 @@ export class InterviewsService {
     return Number(this.config.get('RECRUITMENT_RETENTION_MONTHS') ?? 6);
   }
 
+  // Automatic invitations happen when the position has a template or the company has any active one to fall back on.
+  async hasTemplate(position: { interviewTemplateId: string | null } | null) {
+    return !!position?.interviewTemplateId || !!(await this.prisma.db.interviewTemplate.findFirst({ where: { active: true }, select: { id: true } }));
+  }
+
   // Creates (or, for an expired/cancelled one, refreshes) the invitation. The template is frozen into the interview so
   // every candidate for a vacancy is asked the same questions and scored by the same rubric.
   async invite(applicationId: string, by: 'POLICY' | string = 'POLICY') {
     const app = await this.flow.load(applicationId);
     const position = await this.prisma.db.jobPosition.findFirst({ where: { id: app.vacancy.positionId } });
-    if (!position?.interviewTemplateId) throw new BadRequestException('This position has no interview template');
-    const template = await this.prisma.db.interviewTemplate.findFirst({ where: { id: position.interviewTemplateId, active: true } });
-    if (!template) throw new BadRequestException('The interview template is inactive');
+    // A position without its own template falls back to the newest active one, so inviting never dead-ends.
+    const template = position?.interviewTemplateId
+      ? await this.prisma.db.interviewTemplate.findFirst({ where: { id: position.interviewTemplateId, active: true } })
+      : await this.prisma.db.interviewTemplate.findFirst({ where: { active: true }, orderBy: { createdAt: 'desc' } });
+    if (!template) throw new BadRequestException('No active interview template. Create one under Recruitment > Setup > Interview templates.');
     const token = randomBytes(24).toString('hex');
     const expiresAt = new Date(Date.now() + WINDOW_DAYS * 86_400_000);
     const retentionUntil = new Date(Date.now() + this.retentionMonths() * 30 * 86_400_000);

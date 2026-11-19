@@ -144,17 +144,13 @@ export class PeopleService {
     return this.assertCanSee(id, u);
   }
 
-  async addTraining(id: string, input: { title: string; mandatory?: boolean; dueDate?: string }) {
-    if (!(await this.prisma.db.employee.findFirst({ where: { id } }))) throw new NotFoundException('Employee not found');
-    return this.prisma.db.trainingAssignment.create({ data: { tenantId: '', employeeId: id, title: input.title, mandatory: input.mandatory ?? true, dueDate: input.dueDate ? dateOnly(input.dueDate) : null } });
-  }
-
   async completeTraining(trainingId: string, u: RequestUser) {
     const t = await this.prisma.db.trainingAssignment.findFirst({ where: { id: trainingId } });
     if (!t) throw new NotFoundException('Training assignment not found');
     const emp = await this.prisma.db.employee.findFirstOrThrow({ where: { id: t.employeeId } });
     const hr = actorHasRole(u, 'HR') || actorHasRole(u, 'OWNER');
     if (!hr && emp.userId !== u.id) throw new ForbiddenException('You can only complete your own training');
+    if (t.itemCode) throw new ForbiddenException('This training is completed by passing its exam');
     if (t.status === 'DONE') return t;
     await this.prisma.db.trainingAssignment.updateMany({ where: { id: trainingId, status: 'ASSIGNED' }, data: { status: 'DONE', completedAt: new Date() } });
     await this.audit.record({ action: 'training.completed', entityType: 'TrainingAssignment', entityId: trainingId, after: { by: u.id } });

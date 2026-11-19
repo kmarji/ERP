@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsArray, IsDateString, IsIn, IsNumber, IsOptional, IsString, Min, MinLength, ValidateNested } from 'class-validator';
+import { IsArray, IsBoolean, IsInt, IsDateString, IsIn, IsNumber, IsOptional, IsString, Min, MinLength, ValidateNested } from 'class-validator';
 import { RequestUser } from '../../common/tenancy/tenant-context';
 import { CurrentUser, Roles } from '../auth/auth.decorators';
 import { OffboardingService } from './offboarding.service';
@@ -17,6 +17,12 @@ class ItemDto {
   @IsIn(['EARNING', 'DEDUCTION']) kind!: 'EARNING' | 'DEDUCTION';
   @IsNumber() @Min(0.001) amount!: number;
 }
+class ClearanceDto {
+  @IsString() @MinLength(2) key!: string;
+  @IsString() @MinLength(2) label!: string;
+  @IsOptional() @IsInt() sortOrder?: number;
+  @IsOptional() @IsBoolean() active?: boolean;
+}
 class SettlementDto {
   @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => ItemDto) extra?: ItemDto[];
 }
@@ -29,6 +35,8 @@ const HR = ['OWNER', 'HR'];
 export class OffboardingController {
   constructor(private readonly svc: OffboardingService) {}
 
+  @Roles(...HR) @Get('clearance-items') clearance() { return this.svc.clearanceItems(true); }
+  @Roles(...HR) @Post('clearance-items') saveClearance(@Body() dto: ClearanceDto) { return this.svc.saveClearanceItem(dto); }
   @Roles(...HR, 'FINANCE') @Get() list() { return this.svc.list(); }
   @Roles(...HR, 'FINANCE') @Get(':id') get(@Param('id') id: string) { return this.svc.get(id); }
   @Roles(...HR) @Post() initiate(@Body() dto: InitiateDto, @CurrentUser() u: RequestUser) { return this.svc.initiate(dto, u); }

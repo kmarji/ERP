@@ -113,7 +113,7 @@ export class ApplicationsService {
     }
     await this.flow.fire(appId, 'screen_pass', { decidedBy: 'POLICY:recruitment.screening' });
     const position = await this.prisma.db.jobPosition.findFirst({ where: { id: app.vacancy.positionId } });
-    if (position?.interviewTemplateId) await this.interviews.invite(appId);
+    if (await this.interviews.hasTemplate(position)) await this.interviews.invite(appId);
     return 'SCREENED';
   }
 
@@ -195,8 +195,17 @@ export class ApplicationsService {
   }
 
   async list(filter: { vacancyId?: string; status?: string }, user: RequestUser) {
-    const rows = await this.prisma.db.application.findMany({ where: { vacancyId: filter.vacancyId, status: filter.status as any }, include: { candidate: { select: { name: true, anonymizedAt: true } }, vacancy: { select: { number: true, branchId: true } } }, orderBy: { createdAt: 'desc' }, take: 200 });
-    return rows.filter((r) => { try { assertBranchAccess(user, r.vacancy.branchId, RECRUIT_ROLES); return true; } catch { return false; } }).map((r) => ({ id: r.id, status: r.status, candidate: r.candidate.name, vacancy: r.vacancy.number, createdAt: r.createdAt, decidedBy: r.decidedBy }));
+    const rows = await this.prisma.db.application.findMany({ where: { vacancyId: filter.vacancyId, status: filter.status as any }, include: { candidate: { select: { name: true, phone: true, email: true, anonymizedAt: true } }, vacancy: { select: { number: true, branchId: true, positionId: true } }, interview: { select: { status: true } } }, orderBy: { createdAt: 'desc' }, take: 200 });
+    const visible = rows.filter((r) => { try { assertBranchAccess(user, r.vacancy.branchId, RECRUIT_ROLES); return true; } catch { return false; } });
+    const ids = visible.map((r) => r.id);
+    const [positions, evals] = await Promise.all([this.prisma.db.jobPosition.findMany({ select: { id: true, title: true } }), this.prisma.db.evaluation.findMany({ where: { applicationId: { in: ids } }, select: { applicationId: true, overall: true, recommendation: true } })]);
+    const title = new Map(positions.map((x) => [x.id, x.title]));
+    const ev = new Map(evals.map((x) => [x.applicationId, x]));
+    return visible.map((r) => {
+      const el = (r.eligibility as { pass?: boolean }[]) ?? [];
+      const e = ev.get(r.id);
+      return { id: r.id, status: r.status, candidate: r.candidate.name, phone: r.candidate.phone, email: r.candidate.email, vacancy: r.vacancy.number, branchId: r.vacancy.branchId, position: title.get(r.vacancy.positionId) ?? '', createdAt: r.createdAt, decidedBy: r.decidedBy, screening: el.length ? `${el.filter((x) => x.pass).length}/${el.length}` : null, interview: r.interview?.status ?? null, score: e ? Number(e.overall) : null, recommendation: e?.recommendation ?? null };
+    });
   }
 
   // Viewing a candidate's file is itself audited.
@@ -229,7 +238,7 @@ export class ApplicationsService {
         } else if (input.action === 'override_screening') {
           await this.flow.fire(id, 'override', { decidedBy: by });
           const position = await this.prisma.db.jobPosition.findFirst({ where: { id: app.vacancy.positionId } });
-          if (position?.interviewTemplateId) await this.interviews.invite(id, by);
+          if (await this.interviews.hasTemplate(position)) await this.interviews.invite(id, by);
         } else throw new BadRequestException(`Allowed here: confirm_screening_reject, override_screening`);
         break;
       case 'SCREENED':

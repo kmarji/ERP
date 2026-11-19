@@ -6,6 +6,7 @@ import { Type } from 'class-transformer';
 import { IsArray, IsBoolean, IsDateString, IsIn, IsInt, IsNumber, IsOptional, IsString, Matches, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
 import { RequestUser } from '../../common/tenancy/tenant-context';
 import { CurrentUser, Public, Roles } from '../auth/auth.decorators';
+import { OperationsModule } from '../operations/operations.module';
 import { OnboardingService } from './onboarding.service';
 
 class AllowanceDto {
@@ -113,5 +114,5 @@ class OnboardingController {
   }
 }
 
-@Module({ controllers: [OnboardingController], providers: [OnboardingService], exports: [OnboardingService] })
+@Module({ imports: [OperationsModule], controllers: [OnboardingController], providers: [OnboardingService], exports: [OnboardingService] })
 export class OnboardingModule {}

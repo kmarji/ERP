@@ -6,6 +6,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { RequestUser } from '../../common/tenancy/tenant-context';
 import { CurrentUser, Roles } from '../auth/auth.decorators';
 import { DocumentsService } from '../documents/documents.module';
+import { CoverageService } from './coverage.service';
 import { LeaveService } from './leave.service';
 import { SchedulesService } from './schedules.service';
 import { TimeService } from './time.service';
@@ -35,6 +36,7 @@ class ShiftDto {
   @IsOptional() @IsDateString() startAt?: string;
   @IsOptional() @IsDateString() endAt?: string;
   @IsOptional() @IsString() notes?: string;
+  @IsOptional() @IsString() @MinLength(3) overrideRestReason?: string;
 }
 class BulkDto {
   @IsArray() @ArrayMaxSize(200) @ValidateNested({ each: true }) @Type(() => ShiftDto) shifts!: ShiftDto[];
@@ -48,6 +50,8 @@ class DecideDto {
   @IsBoolean() approve!: boolean;
 }
 class ClockInDto {
+  @IsOptional() @Min(-90) @Max(90) lat?: number;
+  @IsOptional() @Min(-180) @Max(180) lng?: number;
   @IsOptional() @IsString() employeeId?: string;
   @IsOptional() @IsString() branchId?: string;
   @IsOptional() @IsDateString() at?: string;
@@ -68,6 +72,20 @@ class CorrectDto {
   @IsDateString() clockOut!: string;
   @IsString() @MinLength(3) note!: string;
 }
+class OpenShiftDto {
+  @IsString() branchId!: string;
+  @IsDateString() date!: string;
+  @IsOptional() @IsString() templateId?: string;
+  @IsOptional() @IsDateString() startAt?: string;
+  @IsOptional() @IsDateString() endAt?: string;
+  @IsOptional() @IsString() notes?: string;
+}
+class EmployeeIdDto { @IsString() employeeId!: string; }
+class GeofenceDto {
+  @Min(-90) @Max(90) latitude!: number;
+  @Min(-180) @Max(180) longitude!: number;
+  @IsInt() @Min(20) @Max(5000) radiusM!: number;
+}
 class PeriodDto {
   @IsString() branchId!: string;
   @IsDateString() from!: string;
@@ -86,7 +104,27 @@ class LeaveDto {
 @ApiBearerAuth()
 @Controller()
 export class WorkforceController {
-  constructor(private readonly schedules: SchedulesService, private readonly time: TimeService, private readonly leave: LeaveService) {}
+  constructor(private readonly schedules: SchedulesService, private readonly time: TimeService, private readonly leave: LeaveService, private readonly coverage: CoverageService, private readonly prisma: PrismaService) {}
+
+  // ---- geofence, open shifts, no-show coverage
+  @Roles('OWNER', 'HR') @Post('branches/:id/geofence') async geofence(@Param('id') id: string, @Body() dto: GeofenceDto) {
+    const { count } = await this.prisma.db.branch.updateMany({ where: { id }, data: { latitude: dto.latitude, longitude: dto.longitude, geofenceM: dto.radiusM } });
+    if (!count) throw new NotFoundException('Branch not found');
+    return { branchId: id, ...dto };
+  }
+
+  @Roles('OWNER', 'HR') @Post('branches/:id/geofence/clear') async clearGeofence(@Param('id') id: string) {
+    const { count } = await this.prisma.db.branch.updateMany({ where: { id }, data: { latitude: null, longitude: null, geofenceM: null } });
+    if (!count) throw new NotFoundException('Branch not found');
+    return { branchId: id, cleared: true };
+  }
+  @Roles(...MANAGERS) @Post('open-shifts') publishOpen(@Body() dto: OpenShiftDto, @CurrentUser() u: RequestUser) { return this.coverage.publish(dto, u); }
+  @Roles(...MANAGERS) @Get('open-shifts') listOpen(@Query() q: { branchId?: string; status?: string }, @CurrentUser() u: RequestUser) { return this.coverage.list(q, u); }
+  @Roles(...MANAGERS) @Post('open-shifts/:id/assign') assignOpen(@Param('id') id: string, @Body() dto: EmployeeIdDto, @CurrentUser() u: RequestUser) { return this.coverage.assign(id, dto.employeeId, u); }
+  @Roles(...MANAGERS) @Post('open-shifts/:id/cancel') cancelOpen(@Param('id') id: string, @CurrentUser() u: RequestUser) { return this.coverage.cancel(id, u); }
+  @Roles(...MANAGERS) @Post('schedules/flag-no-shows') flagNoShows() { return this.coverage.flagNoShows().then((flagged) => ({ flagged })); }
+  @Roles(...MANAGERS) @Get('schedules/:id/coverage-candidates') candidates(@Param('id') id: string, @CurrentUser() u: RequestUser) { return this.coverage.candidates(id, u); }
+  @Roles(...MANAGERS) @Post('schedules/:id/cover') cover(@Param('id') id: string, @Body() dto: EmployeeIdDto, @CurrentUser() u: RequestUser) { return this.coverage.cover(id, dto.employeeId, u); }
 
   // ---- schedules
   @Roles(...MANAGERS) @Get('shift-templates') templates(@Query('branchId') b?: string) { return this.schedules.listTemplates(b); }
@@ -96,6 +134,7 @@ export class WorkforceController {
   @Roles(...MANAGERS) @Post('schedules') createShift(@Body() dto: ShiftDto, @CurrentUser() u: RequestUser) { return this.schedules.create(dto, u); }
   @Roles(...MANAGERS) @Post('schedules/bulk') bulk(@Body() dto: BulkDto, @CurrentUser() u: RequestUser) { return this.schedules.bulk(dto.shifts, u); }
   @Roles(...MANAGERS) @Post('schedules/:id/cancel') cancelShift(@Param('id') id: string, @CurrentUser() u: RequestUser) { return this.schedules.cancel(id, u); }
+  @Roles(...MANAGERS) @Post('schedules/:id/decide') decideShift(@Param('id') id: string, @Body() dto: DecideDto, @CurrentUser() u: RequestUser) { return this.schedules.decide(id, dto.approve, u); }
   @Roles(...MANAGERS) @Get('shift-swaps') swaps(@Query('status') s?: string) { return this.schedules.listSwaps(s); }
   @Roles(...MANAGERS) @Post('shift-swaps/:id/decide') decideSwap(@Param('id') id: string, @Body() dto: DecideDto, @CurrentUser() u: RequestUser) { return this.schedules.decideSwap(id, dto.approve, u); }
 
@@ -128,6 +167,7 @@ export class SelfServiceController {
     private readonly time: TimeService,
     private readonly leave: LeaveService,
     private readonly docs: DocumentsService,
+    private readonly coverage: CoverageService,
   ) {}
 
   @Get('profile') async profile(@CurrentUser() u: RequestUser) {
@@ -144,7 +184,18 @@ export class SelfServiceController {
     return this.time.list({ employeeId: (await employeeOf(this.prisma, u)).id, ...q });
   }
 
-  @Post('clock-in') clockIn(@CurrentUser() u: RequestUser, @Body() dto: ClockInDto) { return this.time.clockIn(u, { branchId: dto.branchId }); }
+  @Get('colleagues') colleagues(@CurrentUser() u: RequestUser) { return this.coverage.colleagues(u); }
+  @Get('open-shifts') openShifts(@CurrentUser() u: RequestUser) { return this.coverage.mine(u); }
+  @Post('open-shifts/:id/request') requestOpen(@Param('id') id: string, @CurrentUser() u: RequestUser) { return this.coverage.request(id, u); }
+
+  // E11 My Offboarding: the checklist and dates; settlement figures only once approved.
+  @Get('offboarding') async offboarding(@CurrentUser() u: RequestUser) {
+    const o = await this.prisma.db.offboarding.findFirst({ where: { employeeId: (await employeeOf(this.prisma, u)).id, status: { not: 'CANCELLED' } } });
+    if (!o) return null;
+    return { status: o.status, reason: o.reason, noticeDate: o.noticeDate, lastWorkingDay: o.lastWorkingDay, checklist: o.checklist, settlement: o.settlementApprovedBy ? o.settlement : null };
+  }
+
+  @Post('clock-in') clockIn(@CurrentUser() u: RequestUser, @Body() dto: ClockInDto) { return this.time.clockIn(u, { branchId: dto.branchId, lat: dto.lat, lng: dto.lng }); }
   @Post('clock-out') clockOut(@CurrentUser() u: RequestUser) { return this.time.clockOut(u, {}); }
   @Post('time/:id/correct') correct(@Param('id') id: string, @Body() dto: CorrectDto, @CurrentUser() u: RequestUser) { return this.time.correct(id, dto, u); }
 

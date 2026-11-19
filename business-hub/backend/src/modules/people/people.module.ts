@@ -7,6 +7,8 @@ import { FieldCryptoModule } from '../../common/crypto/field-crypto';
 import { RequestUser } from '../../common/tenancy/tenant-context';
 import { CurrentUser, Roles } from '../auth/auth.decorators';
 import { requireStub } from '../integrations/adapter-mode';
+import { LearningService } from '../operations/learning.service';
+import { OperationsModule } from '../operations/operations.module';
 import { PeopleService } from './people.service';
 import { SscAdapter, SscService, StubSscAdapter } from './ssc.service';
 
@@ -43,9 +45,9 @@ class ContractDto {
   @IsOptional() @IsDateString() endDate?: string;
 }
 
+// Training is always a library item with an exam (Training & SOPs); a bare title is no longer accepted.
 class TrainingDto {
-  @IsString() @MinLength(2) title!: string;
-  @IsOptional() @IsBoolean() mandatory?: boolean;
+  @IsString() itemId!: string;
   @IsOptional() @IsDateString() dueDate?: string;
 }
 
@@ -72,6 +74,7 @@ class PeopleController {
   constructor(
     private readonly people: PeopleService,
     private readonly ssc: SscService,
+    private readonly learning: LearningService,
   ) {}
 
   @Roles(...READ) @Get('employees') list(@CurrentUser() u: RequestUser, @Query('branchId') branchId?: string, @Query('status') status?: string, @Query('q') q?: string) {
@@ -110,8 +113,8 @@ class PeopleController {
     return this.people.training(id, u);
   }
 
-  @Roles(...HR) @Post('employees/:id/training') addTraining(@Param('id') id: string, @Body() dto: TrainingDto) {
-    return this.people.addTraining(id, dto);
+  @Roles(...HR) @Post('employees/:id/training') addTraining(@Param('id') id: string, @Body() dto: TrainingDto, @CurrentUser() u: RequestUser) {
+    return this.learning.assign({ employeeId: id, itemId: dto.itemId, dueDate: dto.dueDate }, u);
   }
 
   @Roles(...HR, 'EMPLOYEE') @Post('training/:id/complete') completeTraining(@Param('id') id: string, @CurrentUser() u: RequestUser) {
@@ -145,7 +148,7 @@ class PeopleController {
 }
 
 @Module({
-  imports: [FieldCryptoModule],
+  imports: [FieldCryptoModule, OperationsModule],
   controllers: [PeopleController],
   providers: [
     PeopleService,

@@ -11,6 +11,7 @@ import { VacanciesService } from './vacancies.service';
 
 class TrainingModuleDto {
   @IsString() title!: string;
+  @IsOptional() @IsString() itemCode?: string; // library item code; without it the title must match a library item
   @IsOptional() @IsBoolean() mandatory?: boolean;
   @IsOptional() @IsInt() @Min(0) dueDays?: number;
 }

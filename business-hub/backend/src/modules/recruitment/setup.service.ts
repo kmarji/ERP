@@ -14,7 +14,7 @@ export interface PositionInput {
   eligibilityCriteria?: unknown[];
   interviewTemplateId?: string;
   requiredDocuments?: string[];
-  trainingModules?: { title: string; mandatory?: boolean; dueDays?: number }[];
+  trainingModules?: { title: string; itemCode?: string; mandatory?: boolean; dueDays?: number }[];
 }
 
 @Injectable()

@@ -38,7 +38,7 @@ export class TimeService {
 
   private day = (d: Date) => new Date(`${d.toISOString().slice(0, 10)}T00:00:00.000Z`);
 
-  async clockIn(user: RequestUser, input: { employeeId?: string; branchId?: string; at?: string }) {
+  async clockIn(user: RequestUser, input: { employeeId?: string; branchId?: string; at?: string; lat?: number; lng?: number }) {
     const { employee, kiosk } = await this.actor(user, input.employeeId, input.branchId);
     if (input.at && !kiosk) throw new ForbiddenException('Only a manager can set the time');
     const at = input.at ? new Date(input.at) : new Date();
@@ -46,14 +46,28 @@ export class TimeService {
     if (!branchId) throw new ConflictException('Employee has no branch assignment');
     if (!(await this.prisma.db.employeeAssignment.findFirst({ where: { employeeId: employee.id, branchId, validFrom: { lte: this.day(at) }, OR: [{ validTo: null }, { validTo: { gte: this.day(at) } }] } }))) throw new ConflictException('You are not assigned to this branch');
     if (await this.prisma.db.timeEntry.findFirst({ where: { employeeId: employee.id, status: 'OPEN' } })) throw new ConflictException('You are already clocked in');
+    // A21: a self punch must be inside the branch geofence (when one is set) and against an effective shift. Kiosk punches are a manager's call.
+    if (!kiosk) await this.assertGeofence(branchId, input.lat, input.lng);
     const { rules } = await this.rules.activeFor(this.day(at));
     // Nearest published shift within +-3h of the punch.
     const near = await this.prisma.db.shiftSchedule.findMany({ where: { employeeId: employee.id, status: 'PUBLISHED', startAt: { gte: new Date(at.getTime() - 3 * 3_600_000), lte: new Date(at.getTime() + 3 * 3_600_000) } } });
     const sch = near.sort((a, b) => Math.abs(+a.startAt - +at) - Math.abs(+b.startAt - +at))[0];
+    if (!kiosk && !sch) throw new ConflictException('You have no scheduled shift around this time');
     const late = sch ? Math.max(0, minutes(sch.startAt, at) - rules.lateness.graceMinutes) : 0;
     const row = await this.prisma.db.timeEntry.create({ data: { tenantId: '', employeeId: employee.id, branchId, scheduleId: sch?.id ?? null, clockIn: at, source: kiosk ? 'KIOSK' : 'MOBILE', lateMinutes: late, createdBy: user.id } });
     await this.audit.record({ action: kiosk ? 'time.kiosk_clock_in' : 'time.clock_in', entityType: 'TimeEntry', entityId: row.id, after: { employeeId: employee.id, late } });
     return row;
+  }
+
+  private async assertGeofence(branchId: string, lat?: number, lng?: number) {
+    const b = await this.prisma.db.branch.findFirst({ where: { id: branchId } });
+    if (!b?.geofenceM || b.latitude == null || b.longitude == null) return;
+    if (lat == null || lng == null) throw new BadRequestException('Location is required to clock in at this branch');
+    const rad = (x: number) => (x * Math.PI) / 180;
+    const [la, lo] = [Number(b.latitude), Number(b.longitude)];
+    const h = Math.sin(rad(lat - la) / 2) ** 2 + Math.cos(rad(la)) * Math.cos(rad(lat)) * Math.sin(rad(lng - lo) / 2) ** 2;
+    const meters = 2 * 6_371_000 * Math.asin(Math.sqrt(h));
+    if (meters > b.geofenceM) throw new ForbiddenException(`You are ${Math.round(meters)} m from the branch (limit ${b.geofenceM} m)`);
   }
 
   async clockOut(user: RequestUser, input: { employeeId?: string; at?: string }) {
@@ -65,6 +79,10 @@ export class TimeService {
     if (out <= entry.clockIn) throw new BadRequestException('Clock-out must be after clock-in');
     const calc = await this.compute(employee.id, entry.id, entry.clockIn, out, entry.scheduleId);
     await this.prisma.db.timeEntry.updateMany({ where: { id: entry.id }, data: { clockOut: out, status: 'COMPLETE', ...calc } });
+    // A23: actual hours are kept; excess goes to the manager as an exception and payroll pays it as overtime only once the entry is approved.
+    if (calc.overtimeMinutes > 0) {
+      await this.exceptions.raise({ code: 'ATT_OVERTIME', reason: `${employee.name} worked ${calc.overtimeMinutes} min of overtime`, evidence: { timeEntryId: entry.id, employeeId: employee.id }, impact: 'Overtime is paid only after the entry is approved', branchId: entry.branchId, ownerRole: 'BRANCH_MANAGER', riskTier: 'LOW', availableActions: ['resolve'] });
+    }
     await this.audit.record({ action: kiosk ? 'time.kiosk_clock_out' : 'time.clock_out', entityType: 'TimeEntry', entityId: entry.id, after: calc });
     return this.prisma.db.timeEntry.findFirstOrThrow({ where: { id: entry.id } });
   }

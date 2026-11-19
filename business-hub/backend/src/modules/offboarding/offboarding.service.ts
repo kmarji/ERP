@@ -9,7 +9,7 @@ import { PolicyService } from '../policy-engine/policy.service';
 import { ApprovalDecidedEvent, APPROVAL_DECIDED, ApprovalService } from '../workflow-engine/approval.service';
 
 const ACTION = 'offboarding.settlement';
-const CHECKLIST = [
+const DEFAULT_CLEARANCE = [
   ['RETURN_ASSETS', 'Uniform, keys and equipment returned'],
   ['REVOKE_ACCESS', 'System and POS access revoked'],
   ['EXIT_INTERVIEW', 'Exit interview held'],
@@ -20,6 +20,21 @@ type Item = { label: string; kind: 'EARNING' | 'DEDUCTION'; amount: string };
 @Injectable()
 export class OffboardingService {
   constructor(private readonly prisma: PrismaService, private readonly policy: PolicyService, private readonly approvals: ApprovalService, private readonly audit: AuditService) {}
+
+  // A44: each company defines its own clearance list; the four defaults appear on first use.
+  async clearanceItems(includeInactive = false) {
+    if (!(await this.prisma.db.clearanceItem.count())) await this.prisma.db.clearanceItem.createMany({ data: DEFAULT_CLEARANCE.map(([key, label], i) => ({ tenantId: currentTenantId(), key, label, sortOrder: i })), skipDuplicates: true });
+    return this.prisma.db.clearanceItem.findMany({ where: includeInactive ? {} : { active: true }, orderBy: [{ sortOrder: 'asc' }, { label: 'asc' }] });
+  }
+
+  async saveClearanceItem(input: { key: string; label: string; sortOrder?: number; active?: boolean }) {
+    await this.clearanceItems(true);
+    const key = input.key.trim().toUpperCase().replace(/\s+/g, '_');
+    const data = { label: input.label, sortOrder: input.sortOrder ?? 100, active: input.active ?? true };
+    await this.prisma.db.clearanceItem.upsert({ where: { tenantId_key: { tenantId: currentTenantId(), key } }, create: { tenantId: currentTenantId(), key, ...data }, update: data });
+    await this.audit.record({ action: 'offboarding.clearance_item_saved', entityType: 'ClearanceItem', entityId: key, after: data });
+    return this.clearanceItems(true);
+  }
 
   list() { return this.prisma.db.offboarding.findMany({ orderBy: { createdAt: 'desc' }, take: 100 }); }
 
@@ -35,7 +50,7 @@ export class OffboardingService {
     const notice = dateOnly(input.noticeDate), last = dateOnly(input.lastWorkingDay);
     if (last < notice) throw new BadRequestException('Last working day is before the notice date');
     if (await this.prisma.db.offboarding.findFirst({ where: { employeeId: emp.id, status: { not: 'CANCELLED' } } })) throw new ConflictException('Offboarding already exists for this employee');
-    const row = await this.prisma.db.offboarding.create({ data: { tenantId: '', employeeId: emp.id, reason: input.reason, noticeDate: notice, lastWorkingDay: last, initiatedBy: user.id, checklist: CHECKLIST.map(([key, label]) => ({ key, label, done: false })) } });
+    const row = await this.prisma.db.offboarding.create({ data: { tenantId: '', employeeId: emp.id, reason: input.reason, noticeDate: notice, lastWorkingDay: last, initiatedBy: user.id, checklist: (await this.clearanceItems()).map((c) => ({ key: c.key, label: c.label, done: false })) } });
     await this.audit.record({ action: 'offboarding.initiated', entityType: 'Offboarding', entityId: row.id, after: { employee: emp.number, reason: input.reason, last: input.lastWorkingDay } });
     return row;
   }

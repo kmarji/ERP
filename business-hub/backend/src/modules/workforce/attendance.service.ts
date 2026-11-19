@@ -34,7 +34,8 @@ export class AttendanceService {
     const types = new Map((await this.prisma.db.leaveType.findMany()).map((t) => [t.id, t.paid]));
     const counted = entries.filter((e) => e.status === 'COMPLETE' || e.status === 'APPROVED');
     const worked = counted.reduce((s, e) => s + (e.workedMinutes ?? 0), 0);
-    const overtime = counted.reduce((s, e) => s + (e.overtimeMinutes ?? 0), 0);
+    // Blueprint A23: overtime is paid as overtime only once the entry is approved; until then the hours count as regular.
+    const overtime = counted.filter((e) => e.status === 'APPROVED').reduce((s, e) => s + (e.overtimeMinutes ?? 0), 0);
     let paid = 0, unpaid = 0;
     for (const l of leaves) {
       const a = l.startDate > start ? l.startDate : start;

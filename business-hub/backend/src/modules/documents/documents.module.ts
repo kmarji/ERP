@@ -113,6 +113,8 @@ class DocumentsController {
     const { doc, data } = await this.docs.read(id);
     res.setHeader('Content-Type', doc.mimeType);
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(doc.filename)}"`);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Security-Policy', 'sandbox');
     res.send(data);
   }
 }
