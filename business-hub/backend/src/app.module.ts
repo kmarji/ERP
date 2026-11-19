@@ -20,6 +20,8 @@ import { InventoryModule } from './modules/inventory/inventory.module';
 import { CandidateNotifierModule } from './modules/recruitment/candidate-notifier';
 import { OnboardingModule } from './modules/onboarding/onboarding.module';
 import { OffboardingModule } from './modules/offboarding/offboarding.module';
+import { DisciplineModule } from './modules/discipline/discipline.module';
+import { OperationsModule } from './modules/operations/operations.module';
 import { PayrollModule } from './modules/payroll/payroll.module';
 import { PeopleModule } from './modules/people/people.module';
 import { RecruitmentModule } from './modules/recruitment/recruitment.module';
@@ -78,6 +80,8 @@ import { WorkflowEngineModule } from './modules/workflow-engine/workflow-engine.
     WorkforceModule,
     PayrollModule,
     OffboardingModule,
+    DisciplineModule,
+    OperationsModule,
   ],
   providers: [
     // Guard order: throttle, authenticate (JWT), then role check.

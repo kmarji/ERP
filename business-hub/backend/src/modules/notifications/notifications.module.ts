@@ -41,8 +41,10 @@ export class NotificationsService {
     });
   }
 
-  markRead(id: string) {
-    return this.prisma.db.notification.updateMany({ where: { id }, data: { readAt: new Date() } });
+  // Only a notification addressed to the caller (by user or by one of their roles) can be marked read.
+  markRead(id: string, user: RequestUser) {
+    const roleKeys = [...user.roles.map((r) => r.key), ...user.delegations.map((d) => d.roleKey)];
+    return this.prisma.db.notification.updateMany({ where: { id, OR: [{ userId: user.id }, { roleKey: { in: roleKeys } }] }, data: { readAt: new Date() } });
   }
 }
 
@@ -56,8 +58,8 @@ class NotificationsController {
     return this.svc.mine(u);
   }
 
-  @Post(':id/read') read(@Param('id') id: string) {
-    return this.svc.markRead(id);
+  @Post(':id/read') read(@Param('id') id: string, @CurrentUser() u: RequestUser) {
+    return this.svc.markRead(id, u);
   }
 }
 
