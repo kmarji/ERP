@@ -2,6 +2,7 @@
 # Shares the running demo over the internet with Cloudflare quick tunnels (no account or domain needed).
 #   ./tunnel.sh        start: opens 5 tunnels, rebuilds the web apps to use them, prints the links
 #   ./tunnel.sh stop   close the tunnels and switch back to the normal LAN addresses
+# While tunnels are open, `source .tunnel/env` before rebuilding single services, or they revert to LAN addresses.
 # Requires: cloudflared on PATH, docker compose stack already set up (docker/.env). Links change every start.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -10,7 +11,7 @@ ports=(api:3000 backoffice:8080 pos:8081 storefront:8082 careers:8083)
 
 stop() {
   for f in $D/*.pid; do [ -f "$f" ] && kill "$(cat "$f")" 2>/dev/null || true; done
-  rm -f $D/*.pid $D/*.log $D/urls.txt
+  rm -f $D/*.pid $D/*.log $D/urls.txt $D/env
 }
 
 if [ "${1:-}" = stop ]; then
@@ -43,6 +44,8 @@ echo " done"
 # The web apps bake in the API address, and the API must allow the apps' origins.
 export API_URL="${url[api]}" TRUST_PROXY=1
 export CORS_EXTRA=",${url[backoffice]},${url[pos]},${url[storefront]},${url[careers]}"
+# Saved so a later partial rebuild keeps the tunnel settings: `source .tunnel/env` before any docker compose command.
+printf 'export API_URL=%q TRUST_PROXY=1 CORS_EXTRA=%q\n' "$API_URL" "$CORS_EXTRA" >$D/env
 (cd docker && docker compose up -d --build)
 
 {
