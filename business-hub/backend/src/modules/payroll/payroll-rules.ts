@@ -13,14 +13,14 @@ export const RulesSchema = z.object({
       weeklyThresholdMinutes: z.number().positive().default(2880),
       maxMonthlyHours: z.number().positive().default(60),
     })
-    .default({}),
+    .prefault({}),
   ssc: z
     .object({
       employeeRate: z.number().min(0).max(1).default(0.075),
       employerRate: z.number().min(0).max(1).default(0.1425),
       monthlyCeiling: z.number().positive().nullable().default(null),
     })
-    .default({}),
+    .prefault({}),
   tax: z
     .object({
       annualExemption: z.number().min(0).default(9000),
@@ -35,14 +35,14 @@ export const RulesSchema = z.object({
           { upTo: null, rate: 0.25 },
         ]),
     })
-    .default({}),
-  lateness: z.object({ graceMinutes: z.number().min(0).default(10), deduct: z.boolean().default(false) }).default({}),
-  scheduling: z.object({ minRestHours: z.number().min(0).default(8), maxWeeklyMinutes: z.number().positive().default(3600) }).default({}),
+    .prefault({}),
+  lateness: z.object({ graceMinutes: z.number().min(0).default(10), deduct: z.boolean().default(false) }).prefault({}),
+  scheduling: z.object({ minRestHours: z.number().min(0).default(8), maxWeeklyMinutes: z.number().positive().default(3600) }).prefault({}),
   minimumWageMonthly: z.number().min(0).default(260),
   anomalyPct: z.number().positive().default(30),
-  obligations: z.object({ dueDaysAfterPeriod: z.number().min(0).default(15) }).default({}),
-  endOfService: z.object({ enabled: z.boolean().default(false), monthsFactor: z.number().min(0).default(0) }).default({}),
-  leave: z.object({ annualDays: z.number().min(0).default(14), sickDays: z.number().min(0).default(14) }).default({}),
+  obligations: z.object({ dueDaysAfterPeriod: z.number().min(0).default(15) }).prefault({}),
+  endOfService: z.object({ enabled: z.boolean().default(false), monthsFactor: z.number().min(0).default(0) }).prefault({}),
+  leave: z.object({ annualDays: z.number().min(0).default(14), sickDays: z.number().min(0).default(14) }).prefault({}),
 });
 
 export type PayrollRules = z.infer<typeof RulesSchema>;
