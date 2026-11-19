@@ -71,8 +71,15 @@ describe('M6b onboarding and people core (AT-08)', () => {
         data: { tenantId: T.tenantId, title: 'Barista', titleAr: 'باريستا', payBandMin: 400, payBandMax: 600, requiredDocuments: ['NATIONAL_ID', 'BANK_DETAILS'], trainingModules: [{ title: 'Food safety', mandatory: true, dueDays: 14 }, { title: 'POS basics', mandatory: false, dueDays: 7 }] },
       })
     ).id;
+    await seedExam();
   });
   afterAll(() => app.close());
+
+  // "Food safety" has an exam (one approved question); "POS basics" does not exist in the library.
+  const seedExam = async () => {
+    await prisma.raw.libraryItem.create({ data: { tenantId: T.tenantId, code: 'FS1', kind: 'TRAINING', title: 'Food safety', body: 'Wash hands before handling food.', passScore: 100, maxAttempts: 2, questionsPerAttempt: 1, createdBy: 'x' } });
+    await prisma.raw.questionBankItem.create({ data: { tenantId: T.tenantId, itemCode: 'FS1', text: 'When do you wash hands?', options: ['Before food', 'Never'], correctIndex: 0, status: 'APPROVED', source: 'MANUAL', createdBy: 'x' } });
+  };
 
   describe('offers', () => {
     it('only advanced candidates get offers, below-band salaries are refused, in-band offers auto-approve', async () => {
@@ -187,9 +194,12 @@ describe('M6b onboarding and people core (AT-08)', () => {
       expect(row.sensitive).not.toContain(NATIONAL_ID); // no plaintext in the database
       expect(row.attendanceProfile).toMatchObject({ weeklyHours: 48, scheduleType: 'ROSTER', clockMethod: 'MANUAL' });
 
+      // every training a hire gets has an exam: "Food safety" does; "POS basics" is not in the library, so HR is told instead
       const training = await get(`/employees/${employee.id}/training`);
-      expect(training.map((t: any) => [t.title, t.mandatory]).sort()).toEqual([['Food safety', true], ['POS basics', false]]);
-      expect(new Date(training.find((t: any) => t.title === 'POS basics').dueDate).toISOString().slice(0, 10)).toBe(new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10));
+      expect(training.map((t: any) => [t.title, t.itemCode, t.source])).toEqual([['Food safety', 'FS1', 'AUTO']]);
+      expect(new Date(training[0].dueDate).toISOString().slice(0, 10)).toBe(new Date(Date.now() + 14 * 86_400_000).toISOString().slice(0, 10));
+      const hrTask = await prisma.raw.task.findFirst({ where: { tenantId: T.tenantId, assigneeRole: 'HR', title: { contains: 'POS basics' } } });
+      expect(hrTask?.title).toContain('no library item');
 
       const ssc = (await get('/ssc/actions?status=PREPARED'))[0];
       expect(ssc).toMatchObject({ kind: 'REGISTRATION', employeeId: employee.id });
@@ -226,10 +236,14 @@ describe('M6b onboarding and people core (AT-08)', () => {
       const me = (await http.get('/auth/me').set(auth(login.accessToken)).expect(200)).body;
       expect(me.roles).toEqual([expect.objectContaining({ key: 'EMPLOYEE', branchId })]);
 
-      // the employee sees and completes their own training, but not other people's files
+      // the employee sees their own training but cannot tick it off: only passing the exam completes it
       const training = await get(`/employees/${employee.id}/training`, login.accessToken);
-      await post(`/training/${training[0].id}/complete`, login.accessToken).expect(201);
-      expect((await get(`/employees/${employee.id}/training`)).filter((t: any) => t.status === 'DONE')).toHaveLength(1);
+      await post(`/training/${training[0].id}/complete`, login.accessToken).expect(403);
+      await post(`/me/learning/${training[0].id}/open`, login.accessToken).expect(201);
+      const exam = (await post(`/me/learning/${training[0].id}/exam`, login.accessToken).expect(201)).body;
+      const key = (await prisma.raw.examAttempt.findUniqueOrThrow({ where: { id: exam.attemptId } })).questions as any[];
+      await post(`/me/learning/attempts/${exam.attemptId}/submit`, login.accessToken, { answers: key.map((q) => ({ questionId: q.id, index: q.correctIndex })) }).expect(201);
+      expect((await get(`/employees/${employee.id}/training`)).filter((t: any) => t.status === 'PASSED')).toHaveLength(1);
       await http.get(`/employees/${employee.id}`).set(auth(login.accessToken)).expect(403);
       await http.get('/employees').set(auth(login.accessToken)).expect(403);
       await http.get(`/employees/${employee.id}/sensitive`).set(auth(login.accessToken)).expect(403);
@@ -284,7 +298,9 @@ describe('M6b onboarding and people core (AT-08)', () => {
       expect(all.map((c: any) => [c.version, c.status])).toEqual([[2, 'ACTIVE'], [1, 'SUPERSEDED']]);
       const audit = await get(`/audit?entityType=Employee&entityId=${emp.id}`, T.token);
       expect(audit.find((a: any) => a.action === 'employee.contract_changed').after).toMatchObject({ version: 2, salaryBasic: '550' });
-      expect((await post(`/employees/${emp.id}/training`, hr1.token, { title: 'Allergen awareness' }).expect(201)).body.status).toBe('ASSIGNED');
+      await post(`/employees/${emp.id}/training`, hr1.token, { title: 'Allergen awareness' }).expect(400); // a bare title has no exam, so it is refused
+      const fs = await prisma.raw.libraryItem.findFirstOrThrow({ where: { tenantId: T.tenantId, code: 'FS1' } });
+      expect((await post(`/employees/${emp.id}/training`, hr1.token, { itemId: fs.id }).expect(201)).body.status).toBe('ASSIGNED');
       expect((await http.patch(`/employees/${emp.id}`).set(auth(hr1.token)).send({ nameAr: 'سارة' }).expect(200)).body.nameAr).toBe('سارة');
     });
   });

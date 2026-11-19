@@ -76,8 +76,7 @@ describe('M7a workforce: schedules, time, leave', () => {
   describe('time', () => {
     let entryId: string;
     it('kiosk punches compute late, break and overtime; staff cannot set the time', async () => {
-      await post('/me/clock-in', ana.token, { at: at('02', '09:00') }).expect(201).then((r) => expect(r.body.clockIn).not.toBe(new Date(at('02', '09:00')).toISOString()));
-      await prisma.raw.timeEntry.deleteMany({ where: { tenantId: T.tenantId } }); // that one used the real clock
+      await post('/me/clock-in', ana.token, { at: at('02', '09:00') }).expect(409); // no shift around the real clock: a self punch is refused (A21)
       const inn = (await post('/time/kiosk/clock-in', mgr.token, { employeeId: ana.empId, branchId, at: at('02', '09:20') }).expect(201)).body;
       expect(inn.lateMinutes).toBeGreaterThan(0);
       expect(inn.scheduleId).toBeTruthy();

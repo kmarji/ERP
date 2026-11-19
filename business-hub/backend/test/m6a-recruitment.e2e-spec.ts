@@ -129,6 +129,14 @@ describe('M6 Recruitment-to-Employment: AI interview with safeguards (WF-03, AT-
       await http.get('/apply/status/not-a-token').expect(404);
     });
 
+    it('a position without its own interview template falls back to the newest active template', async () => {
+      const before = await prisma.raw.jobPosition.findMany({ where: { tenantId: T.tenantId } });
+      await prisma.raw.jobPosition.updateMany({ where: { tenantId: T.tenantId }, data: { interviewTemplateId: null } });
+      const r = (await apply({ name: 'Fallback', phone: '0790077777' }).expect(201)).body;
+      expect(r.status).toBe('INTERVIEW_INVITED');
+      for (const p of before) await prisma.raw.jobPosition.update({ where: { id: p.id }, data: { interviewTemplateId: p.interviewTemplateId } });
+    });
+
     it('asks for what is missing and re-screens when the candidate completes it; duplicates are refused', async () => {
       const body = { name: 'Omar', phone: '0790099999', intake: intake({ languages: undefined }) };
       const r = (await apply(body).expect(201)).body;
