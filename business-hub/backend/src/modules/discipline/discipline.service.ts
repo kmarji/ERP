@@ -104,6 +104,11 @@ export class DisciplineService {
     return row;
   }
 
+  // Nobody handles a case about themselves, whatever their role.
+  private async notSelf(employeeId: string, user: RequestUser) {
+    if ((await this.prisma.db.employee.findFirst({ where: { id: employeeId } }))?.userId === user.id) throw new ForbiddenException('You cannot handle a case about yourself');
+  }
+
   private async move(id: string, from: string[], to: string, data: Record<string, unknown> = {}, action = `discipline.${to.toLowerCase()}`) {
     const c = await this.get(id);
     const { count } = await this.prisma.db.disciplinaryCase.updateMany({ where: { id, status: { in: from as any } }, data: { status: to as any, ...data } });
@@ -112,8 +117,8 @@ export class DisciplineService {
     return this.get(id);
   }
 
-  startReview(id: string) { return this.move(id, ['REPORTED'], 'UNDER_REVIEW'); }
-  requestResponse(id: string) { return this.move(id, ['UNDER_REVIEW'], 'EMPLOYEE_RESPONSE'); }
+  async startReview(id: string, user: RequestUser) { await this.notSelf((await this.get(id)).employeeId, user); return this.move(id, ['REPORTED'], 'UNDER_REVIEW'); }
+  async requestResponse(id: string, user: RequestUser) { await this.notSelf((await this.get(id)).employeeId, user); return this.move(id, ['UNDER_REVIEW'], 'EMPLOYEE_RESPONSE'); }
 
   async respond(id: string, employeeId: string, text: string) {
     await this.mine(employeeId, id);
@@ -123,6 +128,7 @@ export class DisciplineService {
   // HR decides; a deduction needs OWNER, a legal basis and stays under the cap. Dismissal is a decision too.
   async decide(id: string, input: { sanction: string; fineAmount?: number; legalBasis?: string; note?: string; expiresAt?: string }, user: RequestUser) {
     const c = await this.get(id);
+    await this.notSelf(c.employeeId, user);
     if (!['UNDER_REVIEW', 'DECISION_PENDING'].includes(c.status)) throw new ConflictException(`Case is ${c.status}`);
     if (input.sanction === 'NONE') return this.move(id, ['UNDER_REVIEW', 'DECISION_PENDING'], 'DISMISSED', { sanction: 'NONE', decisionNote: input.note, decidedBy: user.id, decidedAt: new Date() });
     const action = (await this.actions()).find((a) => a.key === input.sanction);
@@ -148,6 +154,7 @@ export class DisciplineService {
   // Notice goes to the employee; a fine becomes ONE payroll deduction (unique sourceRef blocks duplicates).
   async notify(id: string, user: RequestUser) {
     const c = await this.get(id);
+    await this.notSelf(c.employeeId, user);
     if (c.status !== 'APPROVED') throw new ConflictException(`Case is ${c.status}`);
     await this.prisma.db.$transaction(async (tx) => {
       await tx.disciplinaryCase.updateMany({ where: { id, status: 'APPROVED' }, data: { status: 'NOTIFIED', notifiedAt: new Date() } });
@@ -176,6 +183,7 @@ export class DisciplineService {
   // Overturning a fine that is not yet in a finalized run reverses it; an already-applied deduction needs a payroll correction.
   async decideAppeal(id: string, outcome: 'UPHELD' | 'OVERTURNED', user: RequestUser) {
     const c = await this.get(id);
+    await this.notSelf(c.employeeId, user);
     if (c.status !== 'APPEALED') throw new ConflictException(`Case is ${c.status}`);
     await this.prisma.db.$transaction(async (tx) => {
       await tx.disciplinaryCase.updateMany({ where: { id }, data: { status: 'CLOSED', appealOutcome: outcome, appealDecidedBy: user.id } });
@@ -189,5 +197,5 @@ export class DisciplineService {
     return this.get(id);
   }
 
-  close(id: string) { return this.move(id, ['NOTIFIED'], 'CLOSED'); }
+  async close(id: string, user: RequestUser) { await this.notSelf((await this.get(id)).employeeId, user); return this.move(id, ['NOTIFIED'], 'CLOSED'); }
 }

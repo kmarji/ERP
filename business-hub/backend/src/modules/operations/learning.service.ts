@@ -58,7 +58,10 @@ export class LearningService {
 
   // ---------------------------------------------------------------- A53 question bank
 
-  questions(itemCode: string, status?: string) {
+  // The bank includes the answer key, so someone still sitting this exam cannot read it.
+  async questions(itemCode: string, user: RequestUser, status?: string) {
+    const me = await this.prisma.db.employee.findFirst({ where: { userId: user.id } });
+    if (me && (await this.prisma.db.trainingAssignment.findFirst({ where: { employeeId: me.id, itemCode, status: { in: ['ASSIGNED', 'IN_PROGRESS', 'EXAM_PENDING', 'FAILED'] } } }))) throw new ForbiddenException('You are taking this exam, so you cannot read its questions');
     return this.prisma.db.questionBankItem.findMany({ where: { itemCode, status }, orderBy: { createdAt: 'desc' }, take: 300 });
   }
 
@@ -186,6 +189,7 @@ export class LearningService {
     const a = await this.prisma.db.trainingAssignment.findFirst({ where: { id, itemCode: { not: null } } });
     if (!a) throw new NotFoundException('Assignment not found');
     await this.canManage(a.employeeId, user);
+    if ((await this.prisma.db.employee.findFirst({ where: { id: a.employeeId } }))?.userId === user.id) throw new ForbiddenException('You cannot give yourself new attempts');
     if (a.status !== 'FAILED') throw new ConflictException('Only a failed assignment can be given new attempts');
     await this.prisma.db.trainingAssignment.updateMany({ where: { id }, data: { status: 'IN_PROGRESS', attempts: 0 } });
     await this.audit.record({ action: 'training.attempts_reset', entityType: 'TrainingAssignment', entityId: id, after: { by: user.id } });
@@ -270,6 +274,7 @@ export class LearningService {
   }
 
   async evaluations(employeeId: string, user: RequestUser) {
+    if (typeof employeeId !== 'string' || !employeeId.trim()) throw new BadRequestException('employeeId is required');
     await this.canManage(employeeId, user);
     return this.prisma.db.employeeEvaluation.findMany({ where: { employeeId }, orderBy: { createdAt: 'desc' }, take: 100 });
   }

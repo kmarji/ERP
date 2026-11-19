@@ -7,7 +7,7 @@ describe('M8d feedback: shift templates, rest override, warning ladder, deductio
   let http: Http;
   let prisma: PrismaService;
   let T: Awaited<ReturnType<typeof newTenant>>;
-  let branchId: string, mgr: { token: string }, hr: { token: string }, empId: string;
+  let branchId: string, mgr: { token: string; id: string }, hr: { token: string; id: string }, empId: string;
   const post = (path: string, token: string, body: object = {}) => http.post(path).set(auth(token)).send(body);
   const get = (path: string, token: string) => http.get(path).set(auth(token));
   const day = (n: number) => new Date(Date.now() + n * 86_400_000).toISOString().slice(0, 10);
@@ -88,5 +88,29 @@ describe('M8d feedback: shift templates, rest override, warning ladder, deductio
     const t = (await post('/ops/checklist-templates', T.token, { name: 'Opening', attachmentIds: [pdf], items: [{ label: 'Unlock the door' }] }).expect(201)).body;
     expect(t.attachments[0].filename).toBe('onboarding.pdf');
     await post('/ops/checklist-templates', T.token, { name: 'Closing', attachmentIds: ['nope'], items: [{ label: 'Lock up' }] }).expect(400);
+  });
+
+  it('nobody handles a discipline case about themselves, and exam takers cannot read the answer key', async () => {
+    const position = await prisma.raw.jobPosition.findFirstOrThrow({ where: { tenantId: T.tenantId } });
+    const staff = async (name: string, userId: string) => {
+      const e = await prisma.raw.employee.create({ data: { tenantId: T.tenantId, number: `EMP-${name}`, legalEntityId: T.legalEntityId, userId, name, phone: `0790${Math.floor(Math.random() * 1e6)}`, status: 'ACTIVE', hireDate: new Date('2025-01-01'), positionId: position.id } });
+      await prisma.raw.employeeAssignment.create({ data: { tenantId: T.tenantId, employeeId: e.id, branchId, isPrimary: true, validFrom: new Date('2025-01-01') } });
+      await prisma.raw.employmentContract.create({ data: { tenantId: T.tenantId, employeeId: e.id, version: 1, type: 'PERMANENT', startDate: new Date('2025-01-01'), salaryBasic: 600, weeklyHours: 48 } });
+      return e.id;
+    };
+    const hrEmp = await staff('hrself', hr.id);
+    const c = (await post('/discipline/cases', mgr.token, { employeeId: hrEmp, category: 'CONDUCT', description: 'A case about the HR officer', incidentDate: day(-1) }).expect(201)).body;
+    await post(`/discipline/cases/${c.id}/review`, hr.token).expect(403);
+    await post(`/discipline/cases/${c.id}/review`, T.token).expect(201); // someone else handles it
+    await post(`/discipline/cases/${c.id}/decide`, hr.token, { sanction: 'NONE' }).expect(403);
+
+    const mgrEmp = await staff('mgrself', mgr.id);
+    const item = (await post('/ops/library', T.token, { kind: 'TRAINING', title: 'Cash handling', body: 'Count the till twice.' }).expect(201)).body;
+    const a = await prisma.raw.trainingAssignment.create({ data: { tenantId: T.tenantId, employeeId: mgrEmp, title: item.title, libraryItemId: item.id, itemCode: item.code, status: 'FAILED' } });
+    await get(`/ops/library/${item.code}/questions`, mgr.token).expect(403); // sitting this exam
+    await get(`/ops/library/${item.code}/questions`, T.token).expect(200);
+    await post(`/ops/training/${a.id}/reset`, mgr.token).expect(403); // not for yourself
+    await post(`/ops/training/${a.id}/reset`, T.token).expect(201);
+    await get('/ops/evaluations', T.token).expect(400);
   });
 });

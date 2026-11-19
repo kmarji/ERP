@@ -129,7 +129,7 @@ export class LearningController {
 
   @Roles(...MANAGERS) @Get('library') library(@Query('all') all?: string) { return this.learning.library(all === '1'); }
   @Roles(...MANAGERS) @Post('library') saveItem(@Body() dto: ItemBodyDto, @CurrentUser() u: RequestUser) { return this.learning.saveItem(dto, u); }
-  @Roles(...MANAGERS) @Get('library/:code/questions') questions(@Param('code') code: string, @Query('status') status?: string) { return this.learning.questions(code, status); }
+  @Roles(...MANAGERS) @Get('library/:code/questions') questions(@Param('code') code: string, @CurrentUser() u: RequestUser, @Query('status') status?: string) { return this.learning.questions(code, u, status); }
   @Roles(...MANAGERS) @Post('library/:code/questions') addQuestion(@Param('code') code: string, @Body() dto: QuestionDto, @CurrentUser() u: RequestUser) { return this.learning.addQuestion(code, dto, u); }
   @Roles(...MANAGERS) @Post('library/:code/generate-questions') generate(@Param('code') code: string, @Body() dto: GenerateDto, @CurrentUser() u: RequestUser) { return this.learning.generate(code, dto.count, u); }
   @Roles(...MANAGERS) @Post('questions/:id/decide') decide(@Param('id') id: string, @Body() dto: DecideDto, @CurrentUser() u: RequestUser) { return this.learning.decideQuestion(id, dto.approve, u); }

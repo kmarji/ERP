@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { api, auth } from '../lib/api';
-import { flush, queue } from '../lib/offline';
+import { cache, flush, queue } from '../lib/offline';
 import { useI18n } from '../lib/i18n';
 import { NAV } from '../nav';
 import { ThemeButton } from '../theme';
@@ -61,6 +61,7 @@ export function Layout() {
           <button
             className="text-brand-600 hover:underline"
             onClick={() => {
+              cache.clear();
               auth.clear();
               nav('/login');
             }}

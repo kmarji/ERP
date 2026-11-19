@@ -1,9 +1,12 @@
-import { api, ApiError, upload } from './api';
+import { api, ApiError, auth, upload } from './api';
 
 // W17: checklists completed without a connection wait in this device's storage and sync when it is back.
 // The server keeps the first submission per checklist, so a retry or a second device can never double-submit.
-const QUEUE = 'bh_offline_queue';
-const CACHE = 'bh_offline_cache';
+// Keys carry the signed-in user's id, so on a shared device one person never sees or sends another's saved data.
+const uid = () => { try { return JSON.parse(atob(auth.get()!.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).sub as string; } catch { return 'anon'; } };
+const QUEUE = () => `bh_offline_queue:${uid()}`;
+const CACHE = () => `bh_offline_cache:${uid()}`;
+try { localStorage.removeItem('bh_offline_cache'); } catch { /* the old shared cache */ }
 
 export interface Photo { itemId: string; dataUrl: string; name: string }
 export interface Queued {
@@ -22,16 +25,17 @@ const write = (key: string, v: unknown) => { try { localStorage.setItem(key, JSO
 export const isNetworkError = (e: unknown) => !(e instanceof ApiError);
 
 export const cache = {
-  set: (k: string, v: unknown) => { const c = read<Record<string, unknown>>(CACHE, {}); c[k] = v; write(CACHE, c); },
-  get: <T,>(k: string): T | undefined => read<Record<string, T>>(CACHE, {})[k],
+  set: (k: string, v: unknown) => { const c = read<Record<string, unknown>>(CACHE(), {}); c[k] = v; write(CACHE(), c); },
+  clear: () => { try { localStorage.removeItem(CACHE()); } catch { /* ignore */ } },
+  get: <T,>(k: string): T | undefined => read<Record<string, T>>(CACHE(), {})[k],
 };
 
 export const queue = {
-  list: () => read<Queued[]>(QUEUE, []),
+  list: () => read<Queued[]>(QUEUE(), []),
   // False when the device storage is full (photos are large): the caller must tell the user.
-  add: (q: Queued) => write(QUEUE, [...queue.list().filter((x) => x.runId !== q.runId), q]),
-  remove: (runId: string) => write(QUEUE, queue.list().filter((x) => x.runId !== runId)),
-  patch: (runId: string, p: Partial<Queued>) => write(QUEUE, queue.list().map((x) => (x.runId === runId ? { ...x, ...p } : x))),
+  add: (q: Queued) => write(QUEUE(), [...queue.list().filter((x) => x.runId !== q.runId), q]),
+  remove: (runId: string) => write(QUEUE(), queue.list().filter((x) => x.runId !== runId)),
+  patch: (runId: string, p: Partial<Queued>) => write(QUEUE(), queue.list().map((x) => (x.runId === runId ? { ...x, ...p } : x))),
 };
 
 // GET that falls back to the last copy this device saw when the network is down.

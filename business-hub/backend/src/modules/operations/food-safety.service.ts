@@ -40,7 +40,7 @@ export class FoodSafetyService {
   async myPoints(user: RequestUser) {
     const me = await employeeOf(this.prisma, user);
     const now = new Date();
-    const branches = (await this.prisma.db.employeeAssignment.findMany({ where: { employeeId: me.id, OR: [{ validTo: null }, { validTo: { gte: now } }] } })).map((a) => a.branchId);
+    const branches = (await this.prisma.db.employeeAssignment.findMany({ where: { employeeId: me.id, validFrom: { lte: now }, OR: [{ validTo: null }, { validTo: { gte: now } }] } })).map((a) => a.branchId);
     return this.prisma.db.foodSafetyPoint.findMany({ where: { branchId: { in: branches }, active: true }, orderBy: { name: 'asc' } });
   }
 

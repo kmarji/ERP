@@ -54,12 +54,12 @@ export class DisciplineController {
   @Roles(...HR) @Get('cases') list(@Query() q: { employeeId?: string; status?: string }) { return this.svc.list(q); }
   @Roles(...HR) @Get('cases/:id') get(@Param('id') id: string) { return this.svc.get(id); }
   @Roles(...MANAGERS) @Post('cases') report(@Body() dto: ReportDto, @CurrentUser() u: RequestUser) { return this.svc.report(dto, u); }
-  @Roles(...HR) @Post('cases/:id/review') review(@Param('id') id: string) { return this.svc.startReview(id); }
-  @Roles(...HR) @Post('cases/:id/request-response') ask(@Param('id') id: string) { return this.svc.requestResponse(id); }
+  @Roles(...HR) @Post('cases/:id/review') review(@Param('id') id: string, @CurrentUser() u: RequestUser) { return this.svc.startReview(id, u); }
+  @Roles(...HR) @Post('cases/:id/request-response') ask(@Param('id') id: string, @CurrentUser() u: RequestUser) { return this.svc.requestResponse(id, u); }
   @Roles(...HR) @Post('cases/:id/decide') decide(@Param('id') id: string, @Body() dto: DecideDto, @CurrentUser() u: RequestUser) { return this.svc.decide(id, dto, u); }
   @Roles(...HR) @Post('cases/:id/notify') notify(@Param('id') id: string, @CurrentUser() u: RequestUser) { return this.svc.notify(id, u); }
   @Roles(...HR) @Post('cases/:id/appeal-decision') appeal(@Param('id') id: string, @Body() dto: AppealDecisionDto, @CurrentUser() u: RequestUser) { return this.svc.decideAppeal(id, dto.outcome, u); }
-  @Roles(...HR) @Post('cases/:id/close') close(@Param('id') id: string) { return this.svc.close(id); }
+  @Roles(...HR) @Post('cases/:id/close') close(@Param('id') id: string, @CurrentUser() u: RequestUser) { return this.svc.close(id, u); }
 }
 
 // E10 My Warnings
