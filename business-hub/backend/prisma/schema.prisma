@@ -124,6 +124,20 @@ model Role {
   @@unique([tenantId, key])
 }
 
+// Per-company change to what a role can reach, on top of the defaults written in code (@Roles). area = controller name without "Controller".
+// allow=true grants the role every non-owner-only action in that module; allow=false removes its default access.
+model RolePermission {
+  id        String   @id @default(uuid())
+  tenantId  String
+  roleKey   String
+  area      String
+  allow     Boolean
+  updatedBy String?
+  updatedAt DateTime @default(now()) @updatedAt
+
+  @@unique([tenantId, roleKey, area])
+}
+
 // Scope: both null = HQ-wide; legalEntityId only = entity-wide; branchId = branch-limited.
 model UserRole {
   id            String  @id @default(uuid())
@@ -2444,6 +2458,9 @@ model LeaveRequest {
   startDate        DateTime    @db.Date
   endDate          DateTime    @db.Date
   days             Decimal     @db.Decimal(6, 2)
+  hours            Decimal?    @db.Decimal(5, 2) // set for part-day requests (days = hours / working day length)
+  startTime        String? // HH:MM, part-day only
+  endTime          String?
   status           LeaveStatus @default(PENDING)
   reason           String?
   certificateDocId String?

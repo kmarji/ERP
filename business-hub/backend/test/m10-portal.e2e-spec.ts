@@ -72,4 +72,29 @@ describe('M10 employee portal: manager approves leave, certificate letters', () 
     const issued = (await post(`/letters/${sal.id}/decide`, hr.token, { approve: true }).expect(201)).body;
     expect(issued.content.salary).toEqual({ basic: '600', allowances: '50.000', total: '650.000' });
   });
+
+  it('hourly leave counts as a fraction of the working day and part-day requests may share a date', async () => {
+    const annual = (await get('/leave/types', hr.token)).body.find((t: any) => t.key === 'UNPAID');
+    const day2 = new Date(Date.now() + 41 * 86_400_000); const fri = day2.getUTCDay() === 5;
+    const date = fri ? day(42) : day(41);
+    const a = (await post('/me/leave/requests', other.token, { leaveTypeId: annual.id, startDate: date, endDate: date, startTime: '10:00', endTime: '12:00' }).expect(201)).body;
+    expect(Number(a.hours)).toBe(2);
+    expect(Number(a.days)).toBeCloseTo(0.25, 2); // 2 h of a 8 h day
+    await post('/me/leave/requests', other.token, { leaveTypeId: annual.id, startDate: date, endDate: date, startTime: '11:00', endTime: '13:00' }).expect(409); // times overlap
+    await post('/me/leave/requests', other.token, { leaveTypeId: annual.id, startDate: date, endDate: date, startTime: '13:00', endTime: '14:00' }).expect(201);
+    await post('/me/leave/requests', other.token, { leaveTypeId: annual.id, startDate: date, endDate: date, startTime: '14:00', endTime: '13:00' }).expect(400);
+    await post('/me/leave/requests', other.token, { leaveTypeId: annual.id, startDate: date, endDate: day(60), startTime: '09:00', endTime: '10:00' }).expect(400); // hours need a single date
+  });
+
+  it('leaving the branch geofence clocks an employee out; GPS noise does not', async () => {
+    const branch = await prisma.raw.branch.create({ data: { tenantId: T.tenantId, legalEntityId: T.legalEntityId, code: 'GF', name: 'Fence', latitude: 31.95, longitude: 35.91, geofenceM: 100 } });
+    const emp = await prisma.raw.employee.findFirstOrThrow({ where: { userId: other.id } });
+    await prisma.raw.employeeAssignment.create({ data: { tenantId: T.tenantId, employeeId: emp.id, branchId: branch.id, isPrimary: true, validFrom: new Date('2025-01-01') } });
+    await prisma.raw.timeEntry.create({ data: { tenantId: T.tenantId, employeeId: emp.id, branchId: branch.id, clockIn: new Date(Date.now() - 3_600_000), source: 'MOBILE', status: 'OPEN', createdBy: other.id } });
+    expect((await post('/me/presence', other.token, { lat: 31.9503, lng: 35.91 }).expect(201)).body.clockedOut).toBe(false); // ~33 m: inside
+    expect((await post('/me/presence', other.token, { lat: 31.9515, lng: 35.91, accuracy: 100 }).expect(201)).body.clockedOut).toBe(false); // ~166 m but +-100 m accuracy: not clearly outside
+    const out = (await post('/me/presence', other.token, { lat: 31.96, lng: 35.91, accuracy: 10 }).expect(201)).body; // ~1.1 km
+    expect(out.clockedOut).toBe(true);
+    expect((await prisma.raw.timeEntry.findFirstOrThrow({ where: { employeeId: emp.id } })).status).not.toBe('OPEN');
+  });
 });

@@ -21,11 +21,13 @@ function Directory() {
   const branches = useList('/org/branches');
   const [f, setF] = useState({ branchId: '', status: '', q: '' });
   const [sel, setSel] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
   const qs = new URLSearchParams(Object.entries(f).filter(([, v]) => v)).toString();
   const list = useQuery({ queryKey: ['employees', qs], queryFn: () => api<any[]>(`/employees?${qs}`) });
   return (
     <div className="grid gap-6 lg:grid-cols-5">
       <Card className="lg:col-span-2">
+        <Button className="mb-3" onClick={() => { setAdding(true); setSel(null); }}>Add employee</Button>
         <div className="mb-3 grid grid-cols-3 gap-2">
           <Select value={f.branchId} onChange={(e) => setF({ ...f, branchId: e.target.value })}><option value="">All branches</option>{branches.data?.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</Select>
           <Select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })}><option value="">Any status</option>{['ONBOARDING', 'ACTIVE', 'ON_LEAVE', 'TERMINATED'].map((s) => <option key={s}>{s}</option>)}</Select>
@@ -33,19 +35,110 @@ function Directory() {
         </div>
         <ErrorBox error={list.error} />
         {list.data?.length === 0 ? <Empty>No employees.</Empty> : (
-          <Table head={['No.', 'Name', 'Status']}>
+          <Table head={['No.', 'Name', 'Status', 'Login']}>
             {list.data?.map((e) => (
               <tr key={e.id} onClick={() => setSel(e.id)} className={`cursor-pointer hover:bg-slate-50 ${sel === e.id ? 'bg-brand-50' : ''}`}>
                 <td className="px-3 py-2 text-xs">{e.number}</td>
                 <td className="px-3 py-2 font-medium">{e.name}</td>
                 <td className="px-3 py-2"><StatusBadge status={e.status} /></td>
+                <td className="px-3 py-2 text-xs">{e.userId ? '✓' : <span className="font-semibold text-amber-700">none</span>}</td>
               </tr>
             ))}
           </Table>
         )}
       </Card>
-      <div className="lg:col-span-3">{sel ? <EmployeeDetail id={sel} /> : <Card><Empty>Select an employee.</Empty></Card>}</div>
+      <div className="lg:col-span-3">{adding ? <AddEmployee onDone={(id) => { setAdding(false); setSel(id); }} onCancel={() => setAdding(false)} /> : sel ? <EmployeeDetail id={sel} /> : <Card><Empty>Select an employee.</Empty></Card>}</div>
     </div>
+  );
+}
+
+// Every employee should end up with a login. This creates the employee, contract, branch assignment and login in one go.
+function AddEmployee({ onDone, onCancel }: { onDone: (id: string) => void; onCancel: () => void }) {
+  const qc = useQueryClient();
+  const entities = useList('/org/legal-entities');
+  const branches = useList('/org/branches');
+  const positions = useList('/recruitment/positions');
+  const roles = useList('/roles');
+  const emps = useQuery({ queryKey: ['employees', ''], queryFn: () => api<any[]>('/employees') });
+  const [f, setF] = useState({ name: '', nameAr: '', phone: '', legalEntityId: '', branchId: '', positionId: '', hireDate: ymdNow(), salaryBasic: '', managerId: '', email: '', password: '', roleKey: 'EMPLOYEE', login: true });
+  const set = (k: string) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
+  const save = useMutation({
+    mutationFn: () => api<any>('/employees', { body: { name: f.name, nameAr: f.nameAr || undefined, phone: f.phone, email: f.email || undefined, legalEntityId: f.legalEntityId, branchId: f.branchId, positionId: f.positionId, hireDate: f.hireDate, salaryBasic: Number(f.salaryBasic), managerId: f.managerId || undefined, login: f.login ? { email: f.email, password: f.password, roleKey: f.roleKey } : undefined } }),
+    onSuccess: (r) => { qc.invalidateQueries(); onDone(r.id); },
+  });
+  return (
+    <Card title="Add an employee">
+      <ErrorBox error={save.error} />
+      <form className="grid gap-2 sm:grid-cols-2" onSubmit={(e) => { e.preventDefault(); save.mutate(); }}>
+        <Field label="Name"><Input required minLength={2} value={f.name} onChange={set('name')} /></Field>
+        <Field label="Name (Arabic)"><Input dir="rtl" value={f.nameAr} onChange={set('nameAr')} /></Field>
+        <Field label="Phone"><Input required minLength={5} value={f.phone} onChange={set('phone')} /></Field>
+        <Field label="Hire date"><Input type="date" required value={f.hireDate} onChange={set('hireDate')} /></Field>
+        <Field label="Legal entity"><Select required value={f.legalEntityId} onChange={set('legalEntityId')}><option value="">Select...</option>{entities.data?.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</Select></Field>
+        <Field label="Branch"><Select required value={f.branchId} onChange={set('branchId')}><option value="">Select...</option>{branches.data?.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</Select></Field>
+        <Field label="Position"><Select required value={f.positionId} onChange={set('positionId')}><option value="">Select...</option>{positions.data?.map((x) => <option key={x.id} value={x.id}>{x.title}</option>)}</Select></Field>
+        <Field label="Basic salary (JOD)"><Input type="number" step="0.001" min="0" required value={f.salaryBasic} onChange={set('salaryBasic')} /></Field>
+        <Field label="Reports to (approves leave)"><Select value={f.managerId} onChange={set('managerId')}><option value="">Nobody</option>{emps.data?.filter((x) => x.status === 'ACTIVE' && x.userId).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</Select></Field>
+        <label className="flex items-center gap-2 self-end text-sm sm:col-span-2"><input type="checkbox" checked={f.login} onChange={(e) => setF({ ...f, login: e.target.checked })} /> Create a login (username = email, used in the employee portal)</label>
+        {f.login && <>
+          <Field label="Email (username)"><Input type="email" required value={f.email} onChange={set('email')} /></Field>
+          <Field label="Initial password (min 10)"><Input required minLength={10} value={f.password} onChange={set('password')} /></Field>
+          <Field label="Role (permissions)"><Select value={f.roleKey} onChange={set('roleKey')}>{roles.data?.filter((r) => r.key !== 'SYSTEM').map((r) => <option key={r.key} value={r.key}>{r.name}</option>)}</Select></Field>
+        </>}
+        <div className="flex gap-2 sm:col-span-2"><Button disabled={save.isPending}>Create</Button><Button type="button" variant="ghost" onClick={onCancel}>Cancel</Button></div>
+      </form>
+      <p className="mt-2 text-xs text-slate-500">Give the employee the email and password; they sign in at the employee portal. The branch scopes the role.</p>
+    </Card>
+  );
+}
+const ymdNow = () => new Date().toISOString().slice(0, 10);
+
+// Login, role and password for one employee.
+function AccessCard({ e }: { e: any }) {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ['access', e.id], queryFn: () => api<any>(`/employees/${e.id}/access`), retry: false });
+  const roles = useList('/roles');
+  const branches = useList('/org/branches');
+  const refresh = () => qc.invalidateQueries({ queryKey: ['access', e.id] });
+  const [f, setF] = useState({ email: e.email ?? '', password: '', roleKey: 'EMPLOYEE' });
+  const [pw, setPw] = useState('');
+  const [add, setAdd] = useState({ roleKey: 'BRANCH_MANAGER', branchId: '' });
+  const create = useMutation({ mutationFn: () => api(`/employees/${e.id}/login`, { body: f }), onSuccess: () => { setF({ ...f, password: '' }); qc.invalidateQueries(); } });
+  const reset = useMutation({ mutationFn: () => api(`/employees/${e.id}/password`, { body: { password: pw } }), onSuccess: () => setPw('') });
+  const grant = useMutation({ mutationFn: () => api(`/users/${q.data.user.id}/roles`, { body: { roleKey: add.roleKey, branchId: add.branchId || undefined } }), onSuccess: refresh });
+  const drop = useMutation({ mutationFn: (id: string) => api(`/users/${q.data.user.id}/roles/${id}`, { method: 'DELETE' }), onSuccess: refresh });
+  const user = q.data?.user;
+  return (
+    <Card title="Login and role (permissions)">
+      <ErrorBox error={q.error ?? create.error ?? reset.error ?? grant.error ?? drop.error} />
+      {!user ? (
+        <form className="grid gap-2 sm:grid-cols-3" onSubmit={(ev) => { ev.preventDefault(); create.mutate(); }}>
+          <p className="text-sm font-medium text-amber-700 sm:col-span-3">No login yet: this employee cannot sign in.</p>
+          <Field label="Email (username)"><Input type="email" required value={f.email} onChange={(ev) => setF({ ...f, email: ev.target.value })} /></Field>
+          <Field label="Initial password (min 10)"><Input required minLength={10} value={f.password} onChange={(ev) => setF({ ...f, password: ev.target.value })} /></Field>
+          <Field label="Role"><Select value={f.roleKey} onChange={(ev) => setF({ ...f, roleKey: ev.target.value })}>{roles.data?.filter((r) => r.key !== 'SYSTEM').map((r) => <option key={r.key} value={r.key}>{r.name}</option>)}</Select></Field>
+          <Button disabled={create.isPending}>Create login</Button>
+        </form>
+      ) : (
+        <div className="space-y-3 text-sm">
+          <p>Username: <b>{user.email}</b> {!user.active && <span className="text-red-700">(disabled)</span>}</p>
+          <div>
+            <div className="mb-1 text-xs font-medium text-slate-600">Roles</div>
+            {q.data.roles.map((r: any) => <span key={r.id} className="me-2 inline-flex items-center gap-1 rounded bg-slate-100 px-2 py-0.5 text-xs">{r.name}{r.branchId ? ` · ${nameOf(branches.data, r.branchId)}` : ' · all branches'}<button className="text-red-600" title="Remove" onClick={() => drop.mutate(r.id)}>×</button></span>)}
+            <div className="mt-2 flex flex-wrap items-end gap-2">
+              <Select className="w-44" value={add.roleKey} onChange={(ev) => setAdd({ ...add, roleKey: ev.target.value })}>{roles.data?.filter((r) => r.key !== 'SYSTEM').map((r) => <option key={r.key} value={r.key}>{r.name}</option>)}</Select>
+              <Select className="w-44" value={add.branchId} onChange={(ev) => setAdd({ ...add, branchId: ev.target.value })}><option value="">All branches</option>{branches.data?.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</Select>
+              <Button variant="ghost" disabled={grant.isPending} onClick={() => grant.mutate()}>Add role</Button>
+            </div>
+          </div>
+          <form className="flex flex-wrap items-end gap-2" onSubmit={(ev) => { ev.preventDefault(); reset.mutate(); }}>
+            <Field label="Set a new password (min 10)"><Input required minLength={10} value={pw} onChange={(ev) => setPw(ev.target.value)} /></Field>
+            <Button variant="ghost" disabled={reset.isPending}>Reset password</Button>
+            {reset.isSuccess && <span className="text-xs text-emerald-700">Password changed.</span>}
+          </form>
+        </div>
+      )}
+    </Card>
   );
 }
 
@@ -177,6 +270,7 @@ function EmployeeDetail({ id }: { id: string }) {
         </form>
       </Card>
       <ManagerCard e={e} />
+      {"sscRateNote" in e && <AccessCard e={e} />}
       {"sscRateNote" in e && <RatesCard e={e} />}
       <Card title="Contracts">
         <ErrorBox error={contracts.error} />

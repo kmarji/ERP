@@ -88,7 +88,7 @@ export class LeaveService {
     return n;
   }
 
-  async request(user: RequestUser, input: { employeeId?: string; leaveTypeId: string; startDate: string; endDate: string; reason?: string; certificateDocId?: string }) {
+  async request(user: RequestUser, input: { employeeId?: string; leaveTypeId: string; startDate: string; endDate: string; startTime?: string; endTime?: string; reason?: string; certificateDocId?: string }) {
     const me = input.employeeId ? await this.prisma.db.employee.findFirst({ where: { id: input.employeeId } }) : await employeeOf(this.prisma, user);
     if (!me) throw new NotFoundException('Employee not found');
     if (input.employeeId && me.userId !== user.id) assertBranchAccess(user, (await primaryBranch(this.prisma, me.id, new Date())) ?? '', MANAGERS);
@@ -97,9 +97,24 @@ export class LeaveService {
     const start = utc(input.startDate), end = utc(input.endDate);
     if (end < start) throw new BadRequestException('endDate is before startDate');
     if (start.getUTCFullYear() !== end.getUTCFullYear()) throw new BadRequestException('Split requests that cross a year');
-    const days = this.countDays(start, end);
+    // Part-day request: one date plus a time range; counted as a fraction of the working day so balances stay in days.
+    let days = this.countDays(start, end), hours: number | null = null;
+    if (input.startTime || input.endTime) {
+      if (!input.startTime || !input.endTime || +start !== +end) throw new BadRequestException('Hourly leave needs one date with a start and end time');
+      const m = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+      const mins = m(input.endTime) - m(input.startTime);
+      if (mins <= 0) throw new BadRequestException('End time is before start time');
+      const { rules } = await this.rules.activeFor(start);
+      const dayMin = rules.overtime.dailyThresholdMinutes;
+      if (mins > dayMin) throw new BadRequestException('That is more than a working day; request it as a full day');
+      if (days <= 0) throw new BadRequestException('The request has no working days');
+      hours = mins / 60;
+      days = Math.round((mins / dayMin) * 100) / 100;
+    }
     if (days <= 0) throw new BadRequestException('The request has no working days');
-    const overlap = await this.prisma.db.leaveRequest.findFirst({ where: { employeeId: me.id, status: { in: ['PENDING', 'APPROVED'] }, startDate: { lte: end }, endDate: { gte: start } } });
+    const same = await this.prisma.db.leaveRequest.findMany({ where: { employeeId: me.id, status: { in: ['PENDING', 'APPROVED'] }, startDate: { lte: end }, endDate: { gte: start } } });
+    // Two part-day requests on one date only clash when their times overlap.
+    const overlap = same.find((o) => !(hours != null && o.startTime && o.endTime && (input.endTime! <= o.startTime || input.startTime! >= o.endTime)));
     if (overlap) throw new ConflictException('Overlaps another leave request');
     if (type.requiresCertificateAfterDays != null && days > type.requiresCertificateAfterDays && !input.certificateDocId) throw new BadRequestException(`A medical certificate is required for more than ${type.requiresCertificateAfterDays} days`);
     if (type.paid) {
@@ -108,8 +123,8 @@ export class LeaveService {
       if (bal.available.minus(pending._sum.days ?? 0).lt(days)) throw new ConflictException(`Insufficient ${type.key} balance (${bal.available} available)`);
     }
     const branchId = (await primaryBranch(this.prisma, me.id, start)) ?? undefined;
-    const row = await this.prisma.db.leaveRequest.create({ data: { tenantId: '', employeeId: me.id, leaveTypeId: type.id, startDate: start, endDate: end, days, reason: input.reason ?? null, certificateDocId: input.certificateDocId ?? null } });
-    await this.audit.record({ action: 'leave.requested', entityType: 'LeaveRequest', entityId: row.id, after: { days, type: type.key } });
+    const row = await this.prisma.db.leaveRequest.create({ data: { tenantId: '', employeeId: me.id, leaveTypeId: type.id, startDate: start, endDate: end, days, hours, startTime: hours != null ? input.startTime : null, endTime: hours != null ? input.endTime : null, reason: input.reason ?? null, certificateDocId: input.certificateDocId ?? null } });
+    await this.audit.record({ action: 'leave.requested', entityType: 'LeaveRequest', entityId: row.id, after: { days, hours, type: type.key } });
     const decision = await this.policy.evaluate(ACTION, { amount: days, branchId });
     if (decision.decision === 'BLOCKED') {
       await this.prisma.db.leaveRequest.updateMany({ where: { id: row.id }, data: { status: 'REJECTED', decisionNote: 'Blocked by policy' } });

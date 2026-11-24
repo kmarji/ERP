@@ -5,6 +5,7 @@ import { IsEmail, IsString, MinLength } from 'class-validator';
 import { RequestUser } from '../../common/tenancy/tenant-context';
 import { CurrentUser, Public } from './auth.decorators';
 import { AuthService } from './auth.service';
+import { AccessService } from '../users-roles/access.service';
 
 class LoginDto {
   @IsString() tenant!: string;
@@ -15,7 +16,7 @@ class LoginDto {
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly auth: AuthService) {}
+  constructor(private readonly auth: AuthService, private readonly access: AccessService) {}
 
   @Public()
   // Brute-force protection; tests raise the limit through LOGIN_RATE_LIMIT.
@@ -28,7 +29,7 @@ export class AuthController {
 
   @ApiBearerAuth()
   @Get('me')
-  me(@CurrentUser() user: RequestUser) {
-    return user;
+  async me(@CurrentUser() user: RequestUser) {
+    return { ...user, areas: await this.access.areasFor(user) };
   }
 }

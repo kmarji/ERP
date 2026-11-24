@@ -11,6 +11,7 @@ import { LearningService } from '../operations/learning.service';
 import { OperationsModule } from '../operations/operations.module';
 import { PeopleService } from './people.service';
 import { LettersService } from './letters.service';
+import { AccountsService } from './accounts.service';
 import { SscAdapter, SscService, StubSscAdapter } from './ssc.service';
 
 class PatchDto {
@@ -27,6 +28,31 @@ class PayrollRatesDto {
   @IsOptional() @IsString() sscRateNote?: string | null;
   @IsOptional() @IsNumber() @Min(0) @Max(1) incomeTaxRate?: number | null;
   @IsOptional() @IsString() incomeTaxRateNote?: string | null;
+}
+
+class LoginDto {
+  @IsEmail() email!: string;
+  @IsString() @MinLength(10) password!: string;
+  @IsOptional() @IsString() roleKey?: string;
+}
+class NewEmployeeDto {
+  @IsString() @MinLength(2) name!: string;
+  @IsOptional() @IsString() nameAr?: string;
+  @IsString() @MinLength(5) phone!: string;
+  @IsOptional() @IsEmail() email?: string;
+  @IsString() legalEntityId!: string;
+  @IsString() branchId!: string;
+  @IsString() positionId!: string;
+  @IsDateString() hireDate!: string;
+  @IsOptional() @IsString() contractType?: string;
+  @IsNumber() @Min(0) salaryBasic!: number;
+  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => AllowanceDto) allowances?: AllowanceDto[];
+  @IsOptional() @IsNumber() @Min(1) weeklyHours?: number;
+  @IsOptional() @IsString() managerId?: string;
+  @IsOptional() @ValidateNested() @Type(() => LoginDto) login?: LoginDto;
+}
+class PasswordDto {
+  @IsString() @MinLength(10) password!: string;
 }
 
 class LetterRequestDto {
@@ -105,6 +131,7 @@ class PeopleController {
     private readonly people: PeopleService,
     private readonly ssc: SscService,
     private readonly learning: LearningService,
+    private readonly accounts: AccountsService,
   ) {}
 
   @Roles(...READ) @Get('employees') list(@CurrentUser() u: RequestUser, @Query('branchId') branchId?: string, @Query('status') status?: string, @Query('q') q?: string) {
@@ -114,6 +141,11 @@ class PeopleController {
   @Roles(...READ) @Get('employees/:id') one(@Param('id') id: string, @CurrentUser() u: RequestUser) {
     return this.people.get(id, u);
   }
+
+  @Roles(...HR) @Post('employees') createEmployee(@Body() dto: NewEmployeeDto, @CurrentUser() u: RequestUser) { return this.accounts.create(u, dto); }
+  @Roles(...HR) @Get('employees/:id/access') access(@Param('id') id: string, @CurrentUser() u: RequestUser) { return this.accounts.access(id, u); }
+  @Roles(...HR) @Post('employees/:id/login') createLogin(@Param('id') id: string, @Body() dto: LoginDto, @CurrentUser() u: RequestUser) { return this.accounts.createLogin(id, u, dto); }
+  @Roles(...HR) @Post('employees/:id/password') resetPassword(@Param('id') id: string, @Body() dto: PasswordDto, @CurrentUser() u: RequestUser) { return this.accounts.resetPassword(id, u, dto.password); }
 
   @Roles(...HR) @Get('employees/:id/sensitive') sensitive(@Param('id') id: string, @CurrentUser() u: RequestUser) {
     return this.people.sensitive(id, u);
@@ -186,6 +218,7 @@ class PeopleController {
   controllers: [PeopleController, LettersController],
   providers: [
     PeopleService,
+    AccountsService,
     LettersService,
     SscService,
     {

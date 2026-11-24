@@ -5,7 +5,9 @@ import { api } from '../lib/api';
 import { formatDate } from '../lib/format';
 import { nameOf, useList } from '../lib/lookups';
 
-const TABS = ['Organization', 'Users', 'Delegations', 'Integrations'];
+import Roles from './Roles';
+
+const TABS = ['Organization', 'Users', 'Roles', 'Delegations', 'Integrations'];
 
 const Form = ({ onSubmit, children }: { onSubmit: () => void; children: ReactNode }) => (
   <form className="space-y-2" onSubmit={(e: FormEvent) => { e.preventDefault(); onSubmit(); }}>{children}</form>
@@ -63,6 +65,8 @@ export default function Settings() {
       <PageHeader title="Settings" subtitle="Organization structure, people and their authority, and integration health." />
       <ErrorBox error={err} />
       <Tabs tabs={TABS} value={tab} onChange={setTab} />
+
+      {tab === 'Roles' && <Roles />}
 
       {tab === 'Organization' && (
         <div className="grid gap-6 lg:grid-cols-2">

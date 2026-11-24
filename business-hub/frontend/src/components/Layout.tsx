@@ -25,7 +25,7 @@ export function Layout() {
   }, [qc]);
   const unread = useQuery({ queryKey: ['notif-count'], queryFn: () => api<any[]>('/notifications').then((r) => r.filter((n) => !n.readAt).length), refetchInterval: 60_000, retry: false });
   const me = useQuery({ queryKey: ['me'], queryFn: () => api('/auth/me') });
-  const items = NAV.filter((n) => !n.roles || me.data?.isSystem || me.data?.roles?.some((r: { key: string }) => n.roles!.includes(r.key)));
+  const items = NAV.filter((n) => !n.roles || me.data?.isSystem || me.data?.roles?.some((r: { key: string }) => n.roles!.includes(r.key)) || n.areas?.some((a) => me.data?.areas?.includes(a)));
   const groups = [...new Set(items.map((n) => n.group))];
 
   return (

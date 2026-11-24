@@ -52,9 +52,15 @@ class DecideDto {
 class ClockInDto {
   @IsOptional() @Min(-90) @Max(90) lat?: number;
   @IsOptional() @Min(-180) @Max(180) lng?: number;
+  @IsOptional() @Min(0) @Max(100000) accuracy?: number;
   @IsOptional() @IsString() employeeId?: string;
   @IsOptional() @IsString() branchId?: string;
   @IsOptional() @IsDateString() at?: string;
+}
+class PresenceDto {
+  @Min(-90) @Max(90) lat!: number;
+  @Min(-180) @Max(180) lng!: number;
+  @IsOptional() @Min(0) @Max(100000) accuracy?: number;
 }
 class ClockOutDto {
   @IsOptional() @IsString() employeeId?: string;
@@ -100,6 +106,8 @@ class LeaveDto {
   @IsString() leaveTypeId!: string;
   @IsDateString() startDate!: string;
   @IsDateString() endDate!: string;
+  @IsOptional() @Matches(/^([01]\d|2[0-3]):[0-5]\d$/) startTime?: string;
+  @IsOptional() @Matches(/^([01]\d|2[0-3]):[0-5]\d$/) endTime?: string;
   @IsOptional() @IsString() reason?: string;
   @IsOptional() @IsString() certificateDocId?: string;
 }
@@ -200,7 +208,8 @@ export class SelfServiceController {
     return { status: o.status, reason: o.reason, noticeDate: o.noticeDate, lastWorkingDay: o.lastWorkingDay, checklist: o.checklist, settlement: o.settlementApprovedBy ? o.settlement : null };
   }
 
-  @Post('clock-in') clockIn(@CurrentUser() u: RequestUser, @Body() dto: ClockInDto) { return this.time.clockIn(u, { branchId: dto.branchId, lat: dto.lat, lng: dto.lng }); }
+  @Post('clock-in') clockIn(@CurrentUser() u: RequestUser, @Body() dto: ClockInDto) { return this.time.clockIn(u, { branchId: dto.branchId, lat: dto.lat, lng: dto.lng, accuracy: dto.accuracy }); }
+  @Post('presence') presence(@CurrentUser() u: RequestUser, @Body() dto: PresenceDto) { return this.time.presence(u, dto); }
   @Post('clock-out') clockOut(@CurrentUser() u: RequestUser) { return this.time.clockOut(u, {}); }
   @Post('time/:id/correct') correct(@Param('id') id: string, @Body() dto: CorrectDto, @CurrentUser() u: RequestUser) { return this.time.correct(id, dto, u); }
 

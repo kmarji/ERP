@@ -38,7 +38,7 @@ export class TimeService {
 
   private day = (d: Date) => new Date(`${d.toISOString().slice(0, 10)}T00:00:00.000Z`);
 
-  async clockIn(user: RequestUser, input: { employeeId?: string; branchId?: string; at?: string; lat?: number; lng?: number }) {
+  async clockIn(user: RequestUser, input: { employeeId?: string; branchId?: string; at?: string; lat?: number; lng?: number; accuracy?: number }) {
     const { employee, kiosk } = await this.actor(user, input.employeeId, input.branchId);
     if (input.at && !kiosk) throw new ForbiddenException('Only a manager can set the time');
     const at = input.at ? new Date(input.at) : new Date();
@@ -47,7 +47,7 @@ export class TimeService {
     if (!(await this.prisma.db.employeeAssignment.findFirst({ where: { employeeId: employee.id, branchId, validFrom: { lte: this.day(at) }, OR: [{ validTo: null }, { validTo: { gte: this.day(at) } }] } }))) throw new ConflictException('You are not assigned to this branch');
     if (await this.prisma.db.timeEntry.findFirst({ where: { employeeId: employee.id, status: 'OPEN' } })) throw new ConflictException('You are already clocked in');
     // A21: a self punch must be inside the branch geofence (when one is set) and against an effective shift. Kiosk punches are a manager's call.
-    if (!kiosk) await this.assertGeofence(branchId, input.lat, input.lng);
+    if (!kiosk) await this.assertGeofence(branchId, input.lat, input.lng, input.accuracy);
     const { rules } = await this.rules.activeFor(this.day(at));
     // Nearest published shift within +-3h of the punch.
     const near = await this.prisma.db.shiftSchedule.findMany({ where: { employeeId: employee.id, status: 'PUBLISHED', startAt: { gte: new Date(at.getTime() - 3 * 3_600_000), lte: new Date(at.getTime() + 3 * 3_600_000) } } });
@@ -59,15 +59,37 @@ export class TimeService {
     return row;
   }
 
-  private async assertGeofence(branchId: string, lat?: number, lng?: number) {
+  // Distance to the branch in metres, or null when the branch has no geofence. GPS is only good to `accuracy` metres, so that much is forgiven (capped).
+  private async fenceDistance(branchId: string, lat: number, lng: number, accuracy = 0) {
     const b = await this.prisma.db.branch.findFirst({ where: { id: branchId } });
-    if (!b?.geofenceM || b.latitude == null || b.longitude == null) return;
-    if (lat == null || lng == null) throw new BadRequestException('Location is required to clock in at this branch');
+    if (!b?.geofenceM || b.latitude == null || b.longitude == null) return null;
     const rad = (x: number) => (x * Math.PI) / 180;
     const [la, lo] = [Number(b.latitude), Number(b.longitude)];
     const h = Math.sin(rad(lat - la) / 2) ** 2 + Math.cos(rad(la)) * Math.cos(rad(lat)) * Math.sin(rad(lng - lo) / 2) ** 2;
-    const meters = 2 * 6_371_000 * Math.asin(Math.sqrt(h));
-    if (meters > b.geofenceM) throw new ForbiddenException(`You are ${Math.round(meters)} m from the branch (limit ${b.geofenceM} m)`);
+    const meters = Math.round(2 * 6_371_000 * Math.asin(Math.sqrt(h)));
+    return { meters, limit: b.geofenceM, outside: meters - Math.min(Math.max(accuracy, 0), 150) > b.geofenceM };
+  }
+
+  private async assertGeofence(branchId: string, lat?: number, lng?: number, accuracy?: number) {
+    const b = await this.prisma.db.branch.findFirst({ where: { id: branchId } });
+    if (!b?.geofenceM || b.latitude == null || b.longitude == null) return;
+    if (lat == null || lng == null) throw new BadRequestException('Location is required to clock in at this branch');
+    const f = await this.fenceDistance(branchId, lat, lng, accuracy);
+    if (f?.outside) throw new ForbiddenException(`You are ${f.meters} m from the branch (limit ${f.limit} m, GPS accuracy ${Math.round(accuracy ?? 0)} m)`);
+  }
+
+  // The portal reports the phone's position while the employee is clocked in; leaving the geofence clocks them out.
+  async presence(user: RequestUser, input: { lat: number; lng: number; accuracy?: number }) {
+    const { employee } = await this.actor(user);
+    const entry = await this.prisma.db.timeEntry.findFirst({ where: { employeeId: employee.id, status: 'OPEN', clockOut: null } });
+    if (!entry) return { clockedOut: false };
+    const f = await this.fenceDistance(entry.branchId, input.lat, input.lng, input.accuracy);
+    // A clearly-outside reading only: 30 m beyond the limit, so one noisy fix cannot end a shift.
+    if (!f || f.meters - Math.min(Math.max(input.accuracy ?? 0, 0), 150) <= f.limit + 30) return { clockedOut: false, meters: f?.meters };
+    await this.clockOut(user, {});
+    await this.prisma.db.timeEntry.updateMany({ where: { id: entry.id }, data: { note: `Clocked out automatically: ${f.meters} m from the branch (limit ${f.limit} m)` } });
+    await this.audit.record({ action: 'time.auto_clock_out', entityType: 'TimeEntry', entityId: entry.id, after: { meters: f.meters, limit: f.limit } });
+    return { clockedOut: true, meters: f.meters, limit: f.limit };
   }
 
   async clockOut(user: RequestUser, input: { employeeId?: string; at?: string }) {

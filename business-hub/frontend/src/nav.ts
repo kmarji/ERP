@@ -3,7 +3,8 @@ export interface NavItem {
   to: string;
   label: string;
   group: string;
-  roles?: string[]; // hidden unless the user holds one of these roles
+  roles?: string[]; // hidden unless the user holds one of these roles...
+  areas?: string[]; // ...or the company's role matrix gives them one of these modules
 }
 
 const MGR = ['OWNER', 'HR', 'BRANCH_MANAGER'];
@@ -30,18 +31,18 @@ export const NAV: NavItem[] = [
   { to: '/recruitment', label: 'Recruitment', group: 'People' },
   { to: '/onboarding', label: 'Onboarding', group: 'People' },
   { to: '/people', label: 'Employees', group: 'People' },
-  { to: '/scheduling', label: 'Scheduling', group: 'Workforce', roles: MGR },
-  { to: '/time', label: 'Time & attendance', group: 'Workforce', roles: MGR },
-  { to: '/leave', label: 'Leave', group: 'Workforce', roles: MGR },
-  { to: '/discipline', label: 'Discipline', group: 'Workforce', roles: ['OWNER', 'HR'] },
-  { to: '/payroll', label: 'Payroll', group: 'Workforce', roles: HR_FIN },
-  { to: '/offboarding', label: 'Offboarding', group: 'Workforce', roles: HR_FIN },
-  { to: '/operations', label: 'Operations dashboard', group: 'Operations', roles: MGR },
-  { to: '/checklists', label: 'Checklists', group: 'Operations', roles: MGR },
-  { to: '/training', label: 'Training & SOPs', group: 'Operations', roles: MGR },
-  { to: '/audits', label: 'Audits', group: 'Operations', roles: MGR },
-  { to: '/food-safety', label: 'Food safety', group: 'Operations', roles: MGR },
-  { to: '/actions', label: 'Corrective actions', group: 'Operations', roles: MGR },
+  { to: '/scheduling', label: 'Scheduling', group: 'Workforce', roles: MGR, areas: ['Workforce'] },
+  { to: '/time', label: 'Time & attendance', group: 'Workforce', roles: MGR, areas: ['Workforce'] },
+  { to: '/leave', label: 'Leave', group: 'Workforce', roles: MGR, areas: ['Workforce'] },
+  { to: '/discipline', label: 'Discipline', group: 'Workforce', roles: ['OWNER', 'HR'], areas: ['Discipline'] },
+  { to: '/payroll', label: 'Payroll', group: 'Workforce', roles: HR_FIN, areas: ['Payroll'] },
+  { to: '/offboarding', label: 'Offboarding', group: 'Workforce', roles: HR_FIN, areas: ['Offboarding'] },
+  { to: '/operations', label: 'Operations dashboard', group: 'Operations', roles: MGR, areas: ['OpsOverview'] },
+  { to: '/checklists', label: 'Checklists', group: 'Operations', roles: MGR, areas: ['Operations'] },
+  { to: '/training', label: 'Training & SOPs', group: 'Operations', roles: MGR, areas: ['Learning'] },
+  { to: '/audits', label: 'Audits', group: 'Operations', roles: MGR, areas: ['Audits'] },
+  { to: '/food-safety', label: 'Food safety', group: 'Operations', roles: MGR, areas: ['Audits', 'Operations', 'OpsOverview'] },
+  { to: '/actions', label: 'Corrective actions', group: 'Operations', roles: MGR, areas: ['Audits', 'Operations', 'OpsOverview'] },
   { to: '/me', label: 'My space', group: 'Workforce' },
   { to: '/finance', label: 'Finance', group: 'Finance' },
   { to: '/tax', label: 'Tax filing', group: 'Finance' },

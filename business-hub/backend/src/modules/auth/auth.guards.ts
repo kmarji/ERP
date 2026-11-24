@@ -1,6 +1,8 @@
 import { ExecutionContext, ForbiddenException, Injectable, CanActivate, UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { AuthGuard } from '@nestjs/passport';
+import { areaOf, overridesFor, reaches } from '../../common/permissions';
+import { PrismaService } from '../../common/prisma/prisma.service';
 import { currentContext, RequestUser } from '../../common/tenancy/tenant-context';
 import { IS_PUBLIC, ROLES_KEY } from './auth.decorators';
 
@@ -23,19 +25,18 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
   }
 }
 
-// Declarative @Roles('FINANCE', 'OWNER'): passes if the actor holds any listed role (directly or by delegation).
+// Declarative @Roles('FINANCE', 'OWNER'): passes if the actor holds any listed role (directly or by delegation), adjusted by the company's role matrix (see common/permissions.ts).
 @Injectable()
 export class RolesGuard implements CanActivate {
-  constructor(private readonly reflector: Reflector) {}
+  constructor(private readonly reflector: Reflector, private readonly prisma: PrismaService) {}
 
-  canActivate(ctx: ExecutionContext): boolean {
+  async canActivate(ctx: ExecutionContext): Promise<boolean> {
     const required = this.reflector.getAllAndOverride<string[]>(ROLES_KEY, [ctx.getHandler(), ctx.getClass()]);
     if (!required?.length) return true;
     const user: RequestUser | undefined = ctx.switchToHttp().getRequest().user;
     if (!user) throw new UnauthorizedException();
-    const ok = required.some(
-      (k) => user.roles.some((r) => r.key === k) || user.delegations.some((d) => d.roleKey === k),
-    );
+    const keys = [...user.roles.map((r) => r.key), ...user.delegations.map((d) => d.roleKey)];
+    const ok = reaches(required, areaOf(ctx.getClass()), keys, await overridesFor(this.prisma, user.tenantId));
     if (!ok) throw new ForbiddenException(`Requires one of: ${required.join(', ')}`);
     return true;
   }
