@@ -1,5 +1,6 @@
-import { useState } from 'react';
-import { ApiError, auth, download, upload } from '../lib/api';
+import { useQuery } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
+import { ApiError, api, auth, download, upload } from '../lib/api';
 import { Button, ErrorBox } from './ui';
 
 export interface Attachment { id: string; filename: string; mimeType: string; sizeBytes: number }
@@ -67,6 +68,29 @@ export function AttachPicker({ value, onChange }: { value: Attachment[]; onChang
       {value.map((a) => <div key={a.id} className="flex items-center gap-2 text-sm"><span>{a.filename}</span><span className="text-xs text-slate-500">{size(a.sizeBytes)}</span><Button type="button" variant="ghost" onClick={() => onChange(value.filter((v) => v.id !== a.id))}>Remove</Button></div>)}
       <input type="file" multiple disabled={busy} onChange={(e) => { add(e.target.files); e.target.value = ''; }} className="text-xs" />
       <p className="text-xs text-slate-500">{busy ? 'Uploading...' : 'Any format: PDF, Word, PowerPoint, Excel, images, video. Up to 100 MB each.'}</p>
+    </div>
+  );
+}
+
+// Evidence is stored as bare document ids; this looks up their names and shows images inline.
+export function EvidenceList({ ids }: { ids?: (string | undefined | null)[] }) {
+  const want = [...new Set((ids ?? []).filter(Boolean) as string[])];
+  const q = useQuery({ queryKey: ['evidence', want.join(',')], enabled: want.length > 0, queryFn: () => Promise.all(want.map((id) => api<Attachment>(`/documents/${id}`))) });
+  const [pics, setPics] = useState<Record<string, string>>({});
+  useEffect(() => {
+    q.data?.filter((a) => a.mimeType.startsWith('image/') && viewable(a.mimeType) && !pics[a.id]).forEach(async (a) => {
+      const res = await fetch(`${BASE}/documents/${a.id}/download`, { headers: { Authorization: `Bearer ${auth.get()}` } });
+      if (!res.ok) return;
+      const url = URL.createObjectURL(new Blob([await res.arrayBuffer()], { type: a.mimeType }));
+      setPics((p) => ({ ...p, [a.id]: url }));
+    });
+  }, [q.data]);
+  if (!want.length) return null;
+  return (
+    <div className="mt-1 space-y-2">
+      <ErrorBox error={q.error} />
+      <div className="flex flex-wrap gap-2">{q.data?.filter((a) => pics[a.id]).map((a) => <img key={a.id} src={pics[a.id]} alt={a.filename} className="h-24 rounded border object-cover" />)}</div>
+      <AttachmentList items={q.data} />
     </div>
   );
 }

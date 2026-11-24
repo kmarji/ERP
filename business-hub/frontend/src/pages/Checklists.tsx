@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Select, StatusBadge, Table, Tabs } from '../components/ui';
-import { AttachPicker, Attachment } from '../components/Attachments';
+import { AttachPicker, Attachment, EvidenceList } from '../components/Attachments';
 import { api } from '../lib/api';
 import { addDays, formatDate, ymd } from '../lib/format';
 import { useI18n } from '../lib/i18n';
@@ -71,7 +71,7 @@ function Monitor() {
           <ul className="space-y-1 text-sm">
             {(detail.data.template.items as any[]).map((it) => {
               const a = (detail.data.run.results as any[])?.find((x) => x.itemId === it.id);
-              return <li key={it.id}>{a?.ok ? '✓' : '✗'} {it.label}{it.critical && <b className="ms-1 text-xs text-red-600">critical</b>}{a?.note && <span className="ms-2 text-slate-500">"{a.note}"</span>}{a?.docId && <span className="ms-2 text-xs text-slate-500">evidence attached</span>}</li>;
+              return <li key={it.id}>{a?.ok ? '✓' : '✗'} {it.label}{it.critical && <b className="ms-1 text-xs text-red-600">critical</b>}{a?.note && <span className="ms-2 text-slate-500">"{a.note}"</span>}{a?.docId && <EvidenceList ids={[a.docId]} />}</li>;
             })}
           </ul>
           <div className="mt-3 flex gap-2">

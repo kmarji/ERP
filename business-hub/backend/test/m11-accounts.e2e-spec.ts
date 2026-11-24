@@ -74,3 +74,19 @@ describe('M11b rank gate', () => {
     await app.close();
   });
 });
+
+describe('M11c delegated roles count for the rank gate', () => {
+  it('HR cannot reset the password of someone who holds a delegated owner role', async () => {
+    const { app, http, prisma } = await createApp();
+    const T = await newTenant(http, 'm11c');
+    const hr = await makeUser(http, T, 'hr', 'HR');
+    const cash = await makeUser(http, T, 'cash', 'CASHIER');
+    const pos = await prisma.raw.jobPosition.create({ data: { tenantId: T.tenantId, title: 'X', titleAr: 'س', payBandMin: 1, payBandMax: 2 } });
+    const emp = await prisma.raw.employee.create({ data: { tenantId: T.tenantId, number: 'EMP-D', legalEntityId: T.legalEntityId, userId: cash.id, name: 'D', phone: '0790000000', status: 'ACTIVE', hireDate: new Date('2025-01-01'), positionId: pos.id } });
+    const pw = () => http.post(`/employees/${emp.id}/password`).set(auth(hr.token)).send({ password: 'Takeover-pass-123' });
+    await pw().expect(201);
+    await prisma.raw.delegation.create({ data: { tenantId: T.tenantId, fromUserId: (await prisma.raw.user.findFirstOrThrow({ where: { tenantId: T.tenantId, email: `owner@${T.slug}.test` } })).id, toUserId: cash.id, roleKey: 'OWNER', startsAt: new Date(Date.now() - 1000), endsAt: new Date(Date.now() + 3_600_000) } });
+    await pw().expect(403);
+    await app.close();
+  });
+});

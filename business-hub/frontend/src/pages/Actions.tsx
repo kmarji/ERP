@@ -1,3 +1,4 @@
+import { EvidenceList } from '../components/Attachments';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Select, StatusBadge, Table } from '../components/ui';
@@ -71,7 +72,7 @@ function Detail({ id, emps, onChange }: { id: string; emps?: any[]; onChange: ()
       <ErrorBox error={act.error} />
       <p className="text-sm"><StatusBadge status={a.status} /> {a.source} · {a.severity}{a.assigneeEmployeeId && <> · assigned to <b>{nameOf(emps, a.assigneeEmployeeId)}</b></>}{a.dueAt && <> · due {formatDate(a.dueAt)}</>}</p>
       {a.description && <p className="mt-1 text-sm text-slate-600">{a.description}</p>}
-      {a.completionNote && <p className="mt-2 text-sm"><b>Reported fix:</b> {a.completionNote} <span className="text-xs text-slate-500">({(a.evidenceDocIds as string[]).length} evidence file(s))</span></p>}
+      {a.completionNote && <div className="mt-2 text-sm"><b>Reported fix:</b> {a.completionNote} <span className="text-xs text-slate-500">({(a.evidenceDocIds as string[]).length} evidence file(s))</span><EvidenceList ids={a.evidenceDocIds} /></div>}
       {['OPEN', 'IN_PROGRESS'].includes(a.status) && (
         <div className="mt-3 flex flex-wrap items-end gap-2">
           <Field label="Assign to"><Select value={who} onChange={(e) => setWho(e.target.value)}><option value="">Select...</option>{staff.data?.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</Select></Field>

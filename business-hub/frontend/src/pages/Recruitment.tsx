@@ -395,6 +395,7 @@ function ApplicationDetail({ id }: { id: string }) {
           {ev.reviewedBy && <p className="mt-2 text-xs text-slate-500">Reviewed: {ev.reviewDecision} {ev.reviewNotes}</p>}
         </Card>
       )}
+      {NEXT[a.status] && <p className="rounded border border-sky-200 bg-sky-50 p-3 text-sm text-sky-900"><b>Next step:</b> {NEXT[a.status]}</p>}
       {(actions[a.status] ?? []).length > 0 && (
         <Card title="Decision">
           <div className="mb-2 grid gap-2 md:grid-cols-2">
@@ -428,6 +429,14 @@ function ApplicationDetail({ id }: { id: string }) {
 }
 
 // ---------------------------------------------------------------- appeals
+
+const NEXT: Record<string, string> = {
+  INTERVIEW_INVITED: 'Waiting for the candidate to open their interview link and consent. Nothing to do until they take the interview.',
+  INTERVIEW_SCHEDULED: 'Waiting for the candidate to take the interview. When they finish, the application moves to review here.',
+  INTERVIEWED: 'Assessment in progress; refresh in a moment.',
+  OFFER_PENDING: 'An offer exists. Open Onboarding: approve it in Approvals if it needs approval, Send it, then countersign once the candidate accepts and verify their documents.',
+  ONBOARDING: 'Open Onboarding, select the offer, verify the candidate documents and complete onboarding to create the employee.',
+};
 
 function Appeals() {
   const qc = useQueryClient();
