@@ -33,6 +33,9 @@ describe('M10 employee portal: manager approves leave, certificate letters', () 
 
   it('only HR sets the manager, and not to the employee themselves', async () => {
     await patch(`/employees/${anaEmp}`, ana.token, { managerId: bossEmp }).expect(403);
+    const branchId = (await post('/org/branches', T.token, { legalEntityId: T.legalEntityId, code: 'B1', name: 'Abdoun' }).expect(201)).body.id;
+    const branchHr = await makeUser(http, T, 'bhr', 'HR', branchId);
+    await patch(`/employees/${anaEmp}`, branchHr.token, { managerId: bossEmp }).expect(403); // branch-scoped roles cannot set managers
     await patch(`/employees/${anaEmp}`, hr.token, { managerId: anaEmp }).expect(400);
     await patch(`/employees/${anaEmp}`, hr.token, { managerId: bossEmp }).expect(200);
     await patch(`/employees/${bossEmp}`, hr.token, { managerId: anaEmp }).expect(400); // no loops

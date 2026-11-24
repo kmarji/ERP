@@ -79,13 +79,14 @@ export class PeopleService {
     return e.sensitive ? this.crypto.decrypt(e.sensitive) : {};
   }
 
-  async patch(id: string, data: { name?: string; nameAr?: string; phone?: string; email?: string; managerId?: string | null }) {
+  async patch(id: string, u: RequestUser, data: { name?: string; nameAr?: string; phone?: string; email?: string; managerId?: string | null }) {
     const before = await this.prisma.db.employee.findFirst({ where: { id } });
     if (!before) throw new NotFoundException('Employee not found');
+    if (data.managerId !== undefined && !this.isHq(u)) throw new ForbiddenException('Only company-wide roles can set who an employee reports to');
     if (data.managerId) {
       if (data.managerId === id) throw new BadRequestException('An employee cannot be their own manager');
       const m = await this.prisma.db.employee.findFirst({ where: { id: data.managerId } });
-      if (!m?.userId) throw new BadRequestException('The manager must be an employee with a login');
+      if (!m?.userId || m.status !== 'ACTIVE') throw new BadRequestException('The manager must be an active employee with a login');
       if (m.managerId === id) throw new BadRequestException('That manager already reports to this employee');
     }
     await this.prisma.db.employee.updateMany({ where: { id }, data });

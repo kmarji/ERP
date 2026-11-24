@@ -119,8 +119,8 @@ class PeopleController {
     return this.people.sensitive(id, u);
   }
 
-  @Roles(...HR) @Patch('employees/:id') patch(@Param('id') id: string, @Body() dto: PatchDto) {
-    return this.people.patch(id, dto);
+  @Roles(...HR) @Patch('employees/:id') patch(@Param('id') id: string, @Body() dto: PatchDto, @CurrentUser() u: RequestUser) {
+    return this.people.patch(id, u, dto);
   }
 
   @Roles('HR', 'OWNER', 'FINANCE') @Patch('employees/:id/payroll-rates') payrollRates(@Param('id') id: string, @Body() dto: PayrollRatesDto, @CurrentUser() u: RequestUser) {

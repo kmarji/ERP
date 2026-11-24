@@ -72,6 +72,9 @@ export class ApprovalService {
     // Separation of duties: the requester can never decide their own request.
     if (a.requestedBy === actor.id) throw new ForbiddenException('Requester cannot approve their own request');
 
+    // The delegate shortcut exists only for line managers deciding leave; it never opens other approvals.
+    if (opts.delegate && a.subjectType !== 'LeaveRequest') throw new ForbiddenException('Delegated approval is only for leave requests');
+
     const route = (a.exception?.escalationRoute as string[] | undefined) ?? [];
     const idx = route.indexOf(a.approverRole);
     const allowed = new Set([a.approverRole, 'OWNER', ...(idx >= 0 ? route.slice(idx + 1) : [])]);
