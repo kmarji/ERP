@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
+import { assertRankBelowHr } from '../../common/permissions';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { SequenceService } from '../../common/prisma/sequence.service';
 import { actorHasRole, RequestUser } from '../../common/tenancy/tenant-context';
@@ -26,6 +27,7 @@ export class AccountsService {
     const roleKey = login.roleKey ?? 'EMPLOYEE';
     if (roleKey === 'OWNER' && !actorHasRole(u, 'OWNER')) throw new ForbiddenException('Only an owner can grant OWNER');
     if (roleKey === 'SYSTEM') throw new BadRequestException('SYSTEM is reserved for automation');
+    await assertRankBelowHr(tx, actorHasRole(u, 'OWNER'), [roleKey]);
     const role = await tx.role.findFirst({ where: { key: roleKey } });
     if (!role) throw new NotFoundException(`Role ${roleKey} not found`);
     const email = login.email.toLowerCase();
@@ -102,7 +104,8 @@ export class AccountsService {
     if (!e.userId) throw new ConflictException('This employee has no login yet');
     const target = await this.prisma.db.user.findFirst({ where: { id: e.userId }, include: { roles: { include: { role: true } } } });
     // Resetting an owner's password would be a takeover path for HR.
-    if (target?.roles.some((r) => r.role.key === 'OWNER') && !actorHasRole(u, 'OWNER')) throw new ForbiddenException("Only an owner can reset an owner's password");
+    await assertRankBelowHr(this.prisma.db, actorHasRole(u, 'OWNER'), target?.roles.map((r) => r.role.key) ?? []);
+    if (e.userId === u.id && !actorHasRole(u, 'OWNER')) throw new ForbiddenException('Ask an owner to change your own password here');
     await this.prisma.db.user.updateMany({ where: { id: e.userId }, data: { passwordHash: await bcrypt.hash(password, 10) } });
     await this.audit.record({ action: 'employee.password_reset', entityType: 'User', entityId: e.userId });
     return { reset: true };

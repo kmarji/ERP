@@ -1,3 +1,4 @@
+import { ForbiddenException } from '@nestjs/common';
 import { PrismaService } from './prisma/prisma.service';
 
 // A module ("area") is a controller class. Defaults come from @Roles in code; a company can grant or remove a role's access per area (RolePermission).
@@ -28,4 +29,12 @@ export function reaches(required: string[], area: string, keys: string[], ov: Ov
     if (required.includes(k)) return true;
     return o === true && !ownerOnly;
   });
+}
+
+// Non-owners cannot grant, remove or take over roles at HR level or above (HR, finance, owner, or custom roles ranked that high).
+export async function assertRankBelowHr(db: { role: { findMany(a: object): Promise<{ key: string; rank: number }[]> } }, isOwner: boolean, keys: string[]) {
+  if (isOwner) return;
+  const roles = await db.role.findMany({});
+  const hr = roles.find((r) => r.key === 'HR')?.rank ?? 50;
+  if (keys.some((k) => (roles.find((r) => r.key === k)?.rank ?? 0) >= hr)) throw new ForbiddenException('Only an owner can manage roles at HR level or above');
 }

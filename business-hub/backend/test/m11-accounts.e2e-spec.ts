@@ -58,3 +58,19 @@ describe('M11 employee accounts: create employee with login, roles, password res
     await post(`/employees/${ownerEmp.id}/password`, hr.token, { password: 'Takeover-pass-123' }).expect(403);
   });
 });
+
+describe('M11b rank gate', () => {
+  it('HR cannot grant, remove or take over roles at HR level or above', async () => {
+    const { app, http } = await createApp();
+    const T = await newTenant(http, 'm11b');
+    const hr = await makeUser(http, T, 'hr', 'HR');
+    const fin = await makeUser(http, T, 'fin', 'FINANCE');
+    const send = (m: 'post' | 'delete', path: string, token: string, body: object = {}) => (http as any)[m](path).set(auth(token)).send(body);
+    await send('post', `/users/${fin.id}/roles`, hr.token, { roleKey: 'HR' }).expect(403); // HR level
+    await send('post', `/users/${hr.id}/roles`, hr.token, { roleKey: 'CASHIER' }).expect(403); // own roles
+    await send('post', `/users/${fin.id}/roles`, hr.token, { roleKey: 'CASHIER' }).expect(201);
+    const ur = (await http.get('/users').set(auth(T.token))).body.find((u: any) => u.id === fin.id).roles.find((r: any) => r.role.key === 'FINANCE');
+    await send('delete', `/users/${fin.id}/roles/${ur.id}`, hr.token).expect(403);
+    await app.close();
+  });
+});

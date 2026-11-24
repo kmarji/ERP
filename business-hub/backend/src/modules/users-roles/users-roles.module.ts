@@ -3,7 +3,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import * as bcrypt from 'bcrypt';
 import { IsBoolean, IsDateString, IsEmail, IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
 import { DEFAULT_ROLES } from '../../common/roles';
-import { invalidateOverrides, overridesFor } from '../../common/permissions';
+import { assertRankBelowHr, invalidateOverrides, overridesFor } from '../../common/permissions';
 import { AccessService } from './access.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { actorHasRole, RequestUser } from '../../common/tenancy/tenant-context';
@@ -137,6 +137,8 @@ class UsersController {
   @Post('users/:id/roles')
   async assign(@Param('id') id: string, @Body() dto: AssignRoleDto, @CurrentUser() actor: RequestUser) {
     assertCompanyWide(actor);
+    if (id === actor.id && !actorHasRole(actor, 'OWNER')) throw new ForbiddenException('You cannot change your own roles');
+    await assertRankBelowHr(this.prisma.db, actorHasRole(actor, 'OWNER'), [dto.roleKey]);
     // Separation of duties: nobody can grant the owner role unless they are an owner themselves.
     if (dto.roleKey === 'OWNER' && !actorHasRole(actor, 'OWNER')) throw new BadRequestException('Only an owner can grant OWNER');
     const [user, role] = await Promise.all([
@@ -157,8 +159,7 @@ class UsersController {
     assertCompanyWide(actor);
     const ur = await this.prisma.db.userRole.findFirst({ where: { id: urId, userId: id }, include: { role: true } });
     if (!ur) throw new NotFoundException('Role assignment not found');
-    // HR cannot strip another HR (or anything higher); only the owner can.
-    if (!actorHasRole(actor, 'OWNER') && ur.role.rank >= (await this.prisma.db.role.findFirstOrThrow({ where: { key: 'HR' } })).rank) throw new ForbiddenException('Only an owner can remove roles at HR level or above');
+    await assertRankBelowHr(this.prisma.db, actorHasRole(actor, 'OWNER'), [ur.role.key]);
     if (ur.role.key === 'OWNER' && !actorHasRole(actor, 'OWNER')) throw new BadRequestException('Only an owner can remove OWNER');
     if (ur.role.key === 'OWNER' && id === actor.id) throw new BadRequestException('You cannot remove your own OWNER role');
     await this.prisma.db.userRole.deleteMany({ where: { id: urId } });
