@@ -79,16 +79,23 @@ export class PeopleService {
     return e.sensitive ? this.crypto.decrypt(e.sensitive) : {};
   }
 
-  async patch(id: string, data: { name?: string; nameAr?: string; phone?: string; email?: string }) {
+  async patch(id: string, data: { name?: string; nameAr?: string; phone?: string; email?: string; managerId?: string | null }) {
     const before = await this.prisma.db.employee.findFirst({ where: { id } });
     if (!before) throw new NotFoundException('Employee not found');
+    if (data.managerId) {
+      if (data.managerId === id) throw new BadRequestException('An employee cannot be their own manager');
+      const m = await this.prisma.db.employee.findFirst({ where: { id: data.managerId } });
+      if (!m?.userId) throw new BadRequestException('The manager must be an employee with a login');
+      if (m.managerId === id) throw new BadRequestException('That manager already reports to this employee');
+    }
     await this.prisma.db.employee.updateMany({ where: { id }, data });
-    await this.audit.record({ action: 'employee.updated', entityType: 'Employee', entityId: id, before: { name: before.name, phone: before.phone, email: before.email }, after: data });
+    await this.audit.record({ action: 'employee.updated', entityType: 'Employee', entityId: id, before: { name: before.name, phone: before.phone, email: before.email, managerId: before.managerId }, after: data });
     return strip(await this.prisma.db.employee.findFirstOrThrow({ where: { id } }));
   }
 
   // Fixed SSC / income-tax ratios for one employee (fractions). null clears back to the rule set; a set ratio needs a reason.
   async setPayrollRates(id: string, u: RequestUser, input: { sscEmployeeRate?: number | null; sscEmployerRate?: number | null; sscRateNote?: string | null; incomeTaxRate?: number | null; incomeTaxRateNote?: string | null }) {
+    if (!this.isHq(u)) throw new ForbiddenException('Only company-wide roles can set payroll ratios');
     const before = await this.prisma.db.employee.findFirst({ where: { id } });
     if (!before) throw new NotFoundException('Employee not found');
     const sscSet = input.sscEmployeeRate != null || input.sscEmployerRate != null;

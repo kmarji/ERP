@@ -25,7 +25,8 @@ import { requireStub } from '../integrations/adapter-mode';
 import { DocumentProcessingAdapter, LocalDiskStorage, StorageAdapter, StubDocumentProcessing } from './documents.adapters';
 
 // Training videos are large; override with MAX_UPLOAD_MB. Files are buffered in memory, so very large limits need more RAM.
-const MAX_BYTES = Number(process.env.MAX_UPLOAD_MB ?? 100) * 1024 * 1024;
+const MAX_MB = Number(process.env.MAX_UPLOAD_MB);
+const MAX_BYTES = (MAX_MB > 0 && MAX_MB <= 500 ? MAX_MB : 100) * 1024 * 1024; // bad or missing value falls back to 100 MB
 
 @Injectable()
 export class DocumentsService {

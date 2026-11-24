@@ -2,7 +2,7 @@ import { Body, Controller, Get, Module, Param, Patch, Post, Query } from '@nestj
 import { ConfigService } from '@nestjs/config';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsArray, IsBoolean, IsDateString, IsEmail, IsInt, IsNumber, IsOptional, IsString, Max, Min, MinLength, ValidateNested } from 'class-validator';
+import { IsArray, IsBoolean, IsDateString, IsEmail, IsIn, IsInt, IsNumber, IsOptional, IsString, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
 import { FieldCryptoModule } from '../../common/crypto/field-crypto';
 import { RequestUser } from '../../common/tenancy/tenant-context';
 import { CurrentUser, Roles } from '../auth/auth.decorators';
@@ -10,6 +10,7 @@ import { requireStub } from '../integrations/adapter-mode';
 import { LearningService } from '../operations/learning.service';
 import { OperationsModule } from '../operations/operations.module';
 import { PeopleService } from './people.service';
+import { LettersService } from './letters.service';
 import { SscAdapter, SscService, StubSscAdapter } from './ssc.service';
 
 class PatchDto {
@@ -17,6 +18,7 @@ class PatchDto {
   @IsOptional() @IsString() nameAr?: string;
   @IsOptional() @IsString() phone?: string;
   @IsOptional() @IsEmail() email?: string;
+  @IsOptional() @IsString() managerId?: string | null;
 }
 
 class PayrollRatesDto {
@@ -25,6 +27,16 @@ class PayrollRatesDto {
   @IsOptional() @IsString() sscRateNote?: string | null;
   @IsOptional() @IsNumber() @Min(0) @Max(1) incomeTaxRate?: number | null;
   @IsOptional() @IsString() incomeTaxRateNote?: string | null;
+}
+
+class LetterRequestDto {
+  @IsIn(['SALARY', 'EMPLOYMENT']) kind!: 'SALARY' | 'EMPLOYMENT';
+  @IsString() @MinLength(2) @MaxLength(200) addressee!: string;
+  @IsOptional() @IsString() @MaxLength(300) purpose?: string;
+}
+class LetterDecideDto {
+  @IsBoolean() approve!: boolean;
+  @IsOptional() @IsString() note?: string;
 }
 
 class AssignDto {
@@ -74,6 +86,16 @@ class FailDto {
 
 const HR = ['HR', 'OWNER'];
 const READ = ['HR', 'OWNER', 'FINANCE', 'BRANCH_MANAGER'];
+
+@Controller()
+class LettersController {
+  constructor(private readonly letters: LettersService) {}
+  @Post('me/letters') request(@CurrentUser() u: RequestUser, @Body() dto: LetterRequestDto) { return this.letters.request(u, dto); }
+  @Get('me/letters') mine(@CurrentUser() u: RequestUser) { return this.letters.mine(u); }
+  @Get('me/letters/:id') one(@Param('id') id: string, @CurrentUser() u: RequestUser) { return this.letters.mineOne(id, u); }
+  @Roles('HR', 'OWNER') @Get('letters') list(@CurrentUser() u: RequestUser, @Query('status') status?: string) { return this.letters.list(u, status); }
+  @Roles('HR', 'OWNER') @Post('letters/:id/decide') decide(@Param('id') id: string, @Body() dto: LetterDecideDto, @CurrentUser() u: RequestUser) { return this.letters.decide(id, dto.approve, dto.note, u); }
+}
 
 @ApiTags('people')
 @ApiBearerAuth()
@@ -161,9 +183,10 @@ class PeopleController {
 
 @Module({
   imports: [FieldCryptoModule, OperationsModule],
-  controllers: [PeopleController],
+  controllers: [PeopleController, LettersController],
   providers: [
     PeopleService,
+    LettersService,
     SscService,
     {
       provide: SscAdapter,

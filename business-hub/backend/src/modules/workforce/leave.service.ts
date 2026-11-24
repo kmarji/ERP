@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { Cron } from '@nestjs/schedule';
 import { d } from '../../common/money';
@@ -122,6 +122,26 @@ export class LeaveService {
 
   list(f: { employeeId?: string; status?: string; from?: string; to?: string }) {
     return this.prisma.db.leaveRequest.findMany({ where: { employeeId: f.employeeId, status: f.status as any, startDate: f.to ? { lte: utc(f.to) } : undefined, endDate: f.from ? { gte: utc(f.from) } : undefined }, orderBy: { startDate: 'desc' }, take: 300 });
+  }
+
+  // ---- line manager (an ordinary employee) approves their direct reports' leave from the portal
+  async teamRequests(user: RequestUser) {
+    const me = await employeeOf(this.prisma, user);
+    const reports = await this.prisma.db.employee.findMany({ where: { managerId: me.id }, select: { id: true, name: true, number: true } });
+    if (!reports.length) return [];
+    const rows = await this.prisma.db.leaveRequest.findMany({ where: { employeeId: { in: reports.map((r) => r.id) }, status: 'PENDING' }, orderBy: { startDate: 'asc' }, take: 100 });
+    return rows.map((r) => ({ ...r, employee: reports.find((e) => e.id === r.employeeId) }));
+  }
+
+  async managerDecide(id: string, approve: boolean, note: string | undefined, user: RequestUser) {
+    const me = await employeeOf(this.prisma, user);
+    const r = await this.prisma.db.leaveRequest.findFirst({ where: { id } });
+    const owner = r && (await this.prisma.db.employee.findFirst({ where: { id: r.employeeId } }));
+    if (!r || !owner || owner.managerId !== me.id) throw new ForbiddenException('You can only decide leave for people who report to you');
+    const approval = await this.prisma.db.approval.findFirst({ where: { subjectType: 'LeaveRequest', subjectId: id, status: 'PENDING' } });
+    if (!approval) throw new ConflictException('This request is not waiting for approval');
+    await this.approvals.decide(approval.id, approve, user, note, { delegate: true });
+    return this.prisma.db.leaveRequest.findFirstOrThrow({ where: { id } });
   }
 
   // Shared by the approval handler and AUTO routing. Idempotent: only a PENDING request can be decided.

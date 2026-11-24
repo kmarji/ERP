@@ -11,8 +11,8 @@ export default function People() {
   return (
     <div>
       <PageHeader title="Employees" subtitle="Employee files, assignments, contracts, training and social security (SSC) actions." />
-      <Tabs tabs={['Employees', 'SSC']} value={tab} onChange={setTab} />
-      {tab === 'Employees' ? <Directory /> : <Ssc />}
+      <Tabs tabs={['Employees', 'Letters', 'SSC']} value={tab} onChange={setTab} />
+      {tab === 'Employees' ? <Directory /> : tab === 'Letters' ? <LetterRequests /> : <Ssc />}
     </div>
   );
 }
@@ -46,6 +46,45 @@ function Directory() {
       </Card>
       <div className="lg:col-span-3">{sel ? <EmployeeDetail id={sel} /> : <Card><Empty>Select an employee.</Empty></Card>}</div>
     </div>
+  );
+}
+
+// Who approves this person's leave from the employee portal. Must be an employee with a login.
+function ManagerCard({ e }: { e: any }) {
+  const qc = useQueryClient();
+  const emps = useQuery({ queryKey: ['employees', ''], queryFn: () => api<any[]>('/employees') });
+  const save = useMutation({ mutationFn: (managerId: string) => api(`/employees/${e.id}`, { method: 'PATCH', body: { managerId: managerId || null } }), onSuccess: () => qc.invalidateQueries() });
+  return (
+    <Card title="Reports to (approves leave in the employee portal)">
+      <ErrorBox error={save.error} />
+      <Select className="w-72" value={e.managerId ?? ''} onChange={(ev) => save.mutate(ev.target.value)}>
+        <option value="">Nobody (approved by role in the back-office)</option>
+        {emps.data?.filter((m) => m.id !== e.id && m.userId).map((m) => <option key={m.id} value={m.id}>{m.name} · {m.number}</option>)}
+      </Select>
+    </Card>
+  );
+}
+
+// Salary and employment certificates employees ask for in the portal.
+function LetterRequests() {
+  const qc = useQueryClient();
+  const [status, setStatus] = useState('PENDING');
+  const q = useQuery({ queryKey: ['letters', status], queryFn: () => api<any[]>(`/letters?status=${status}`) });
+  const [note, setNote] = useState<Record<string, string>>({});
+  const decide = useMutation({ mutationFn: (x: { id: string; approve: boolean }) => api(`/letters/${x.id}/decide`, { body: { approve: x.approve, note: note[x.id] || undefined } }), onSuccess: () => qc.invalidateQueries({ queryKey: ['letters'] }) });
+  return (
+    <Card>
+      <ErrorBox error={q.error ?? decide.error} />
+      <Select className="mb-3 w-40" value={status} onChange={(ev) => setStatus(ev.target.value)}>{['PENDING', 'APPROVED', 'REJECTED'].map((x) => <option key={x}>{x}</option>)}</Select>
+      {q.data?.length === 0 ? <Empty>No letters.</Empty> : (
+        <Table head={['Employee', 'Type', 'Addressed to', 'Purpose', 'Requested', '']}>
+          {q.data?.map((l) => (
+            <tr key={l.id}><td className="px-3 py-2 font-medium">{l.employee?.name}</td><td className="px-3 py-2">{l.kind}</td><td className="px-3 py-2">{l.addressee}</td><td className="px-3 py-2 text-xs">{l.purpose}</td><td className="px-3 py-2 text-xs">{formatDate(l.createdAt)}</td>
+              <td className="px-3 py-2 text-end">{l.status === 'PENDING' ? <span className="flex items-center justify-end gap-1"><Input className="w-40" placeholder="Reason (to reject)" value={note[l.id] ?? ''} onChange={(ev) => setNote({ ...note, [l.id]: ev.target.value })} /><Button disabled={decide.isPending} onClick={() => decide.mutate({ id: l.id, approve: true })}>Approve</Button><Button variant="danger" disabled={decide.isPending || !note[l.id]?.trim()} onClick={() => decide.mutate({ id: l.id, approve: false })}>Reject</Button></span> : <StatusBadge status={l.status} />}</td></tr>
+          ))}
+        </Table>
+      )}
+    </Card>
   );
 }
 
@@ -137,6 +176,7 @@ function EmployeeDetail({ id }: { id: string }) {
           <Button type="submit">Add</Button>
         </form>
       </Card>
+      <ManagerCard e={e} />
       {"sscRateNote" in e && <RatesCard e={e} />}
       <Card title="Contracts">
         <ErrorBox error={contracts.error} />

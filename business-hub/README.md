@@ -10,11 +10,11 @@ cp .env.example .env && npm install
 npx prisma migrate deploy && npm run prisma:seed       # demo tenant
 npm run start:dev                                       # API :3000, Swagger at /docs
 ```
-Apps (each `npm install && npm run dev`): `frontend` :5173 back-office, `pos-app` :5174, `storefront` :5175, `careers` :5176. Demo login: tenant `demo`, `owner@demo.test` (password `ChangeMe-12345` unless `SEED_PASSWORD` is set).
+Apps (each `npm install && npm run dev`): `frontend` :5173 back-office, `pos-app` :5174, `storefront` :5175, `careers` :5176, `portal` :5177 (employee portal). Demo login: tenant `demo`, `owner@demo.test` (password `ChangeMe-12345` unless `SEED_PASSWORD` is set).
 
 Tablet POS as an iOS/Android app with network receipt printing and standalone card terminal: see `pos-app/README.md`.
 
-Full stack in containers: `cp docker/.env.example docker/.env`, fill it in, then `docker compose -f docker/docker-compose.yml up --build`. Back-office :8080, POS :8081, storefront :8082, careers :8083.
+Full stack in containers: `cp docker/.env.example docker/.env`, fill it in, then `docker compose -f docker/docker-compose.yml up --build`. Back-office :8080, POS :8081, storefront :8082, careers :8083, employee portal :8084.
 
 ## Test
 ```bash

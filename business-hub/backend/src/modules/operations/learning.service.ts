@@ -86,7 +86,7 @@ export class LearningService {
     // Text can only be read from the written material and plain-text attachments; PDFs, Office files and videos are not parsed.
     let body = item.body;
     for (const a of (item.attachments as unknown as Attachment[]) ?? []) {
-      if (/^text\//.test(a.mimeType) || /\.(txt|md|csv)$/i.test(a.filename)) body += `\n${(await this.docs.read(a.id)).data.toString('utf8')}`;
+      if (/^text\//.test(a.mimeType) || /\.(txt|md|csv)$/i.test(a.filename)) body += `\n${(await this.docs.read(a.id)).data.subarray(0, 200_000).toString('utf8')}`; // cap text read per attachment
     }
     const made = await this.gen.generate({ title: item.title, body, count });
     if (!made.length) throw new BadRequestException('No questions could be generated: the written material is too short. Paste the key text of the PDF, slides or video into the material box (files and videos are not read), then try again.');

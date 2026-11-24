@@ -91,6 +91,10 @@ class PeriodDto {
   @IsDateString() from!: string;
   @IsDateString() to!: string;
 }
+class TeamDecideDto {
+  @IsBoolean() approve!: boolean;
+  @IsOptional() @IsString() note?: string;
+}
 class LeaveDto {
   @IsOptional() @IsString() employeeId?: string;
   @IsString() leaveTypeId!: string;
@@ -173,7 +177,8 @@ export class SelfServiceController {
   @Get('profile') async profile(@CurrentUser() u: RequestUser) {
     const e = await employeeOf(this.prisma, u);
     const assignments = await this.prisma.db.employeeAssignment.findMany({ where: { employeeId: e.id } });
-    return { id: e.id, number: e.number, name: e.name, hireDate: e.hireDate, status: e.status, assignments };
+    const reports = await this.prisma.db.employee.count({ where: { managerId: e.id } });
+    return { id: e.id, number: e.number, name: e.name, hireDate: e.hireDate, status: e.status, assignments, isManager: reports > 0 };
   }
 
   @Get('schedule') async schedule(@CurrentUser() u: RequestUser, @Query() q: { from?: string; to?: string }) {
@@ -203,6 +208,9 @@ export class SelfServiceController {
   @Get('leave/requests') async requests(@CurrentUser() u: RequestUser) { return this.leave.list({ employeeId: (await employeeOf(this.prisma, u)).id }); }
   @Post('leave/requests') request(@CurrentUser() u: RequestUser, @Body() dto: LeaveDto) { return this.leave.request(u, { ...dto, employeeId: undefined }); }
   @Post('leave/requests/:id/cancel') cancelLeave(@Param('id') id: string, @CurrentUser() u: RequestUser) { return this.leave.cancel(id, u); }
+
+  @Get('team/leave') teamLeave(@CurrentUser() u: RequestUser) { return this.leave.teamRequests(u); }
+  @Post('team/leave/:id/decide') teamDecide(@Param('id') id: string, @Body() dto: TeamDecideDto, @CurrentUser() u: RequestUser) { return this.leave.managerDecide(id, dto.approve, dto.note, u); }
 
   @Get('swaps') async swaps(@CurrentUser() u: RequestUser) { return this.schedules.mySwaps((await employeeOf(this.prisma, u)).id); }
   @Post('swaps') swap(@Body() dto: SwapDto, @CurrentUser() u: RequestUser) { return this.schedules.requestSwap(dto, u); }

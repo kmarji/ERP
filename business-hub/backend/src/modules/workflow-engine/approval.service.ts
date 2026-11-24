@@ -64,7 +64,8 @@ export class ApprovalService {
     });
   }
 
-  async decide(id: string, approve: boolean, actor: RequestUser, comment?: string) {
+  // delegate: the caller already proved they may decide this subject (e.g. the employee's line manager), so the role check is skipped.
+  async decide(id: string, approve: boolean, actor: RequestUser, comment?: string, opts: { delegate?: boolean } = {}) {
     const a = await this.prisma.db.approval.findFirst({ where: { id }, include: { exception: true } });
     if (!a) throw new NotFoundException('Approval not found');
     if (a.status !== 'PENDING') throw new BadRequestException(`Approval already ${a.status}`);
@@ -75,7 +76,7 @@ export class ApprovalService {
     const idx = route.indexOf(a.approverRole);
     const allowed = new Set([a.approverRole, 'OWNER', ...(idx >= 0 ? route.slice(idx + 1) : [])]);
     const branchId = a.branchId ?? a.exception?.branchId ?? null;
-    if (![...allowed].some((r) => actorHasRole(actor, r, { branchId }))) {
+    if (!opts.delegate && ![...allowed].some((r) => actorHasRole(actor, r, { branchId }))) {
       throw new ForbiddenException(`Requires role ${a.approverRole} or higher in the escalation route`);
     }
 

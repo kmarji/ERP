@@ -2181,12 +2181,34 @@ model Employee {
   sscRateNote       String?
   incomeTaxRate     Decimal?       @db.Decimal(7, 6)
   incomeTaxRateNote String?
+  // The employee (not a user role) who approves this person's leave from the employee portal. Null = role-based approval only.
+  managerId         String?
   createdAt         DateTime       @default(now())
 
   assignments EmployeeAssignment[]
   contracts   EmploymentContract[]
 
   @@unique([tenantId, number])
+  @@index([tenantId, status])
+}
+
+// A salary or employment certificate. The figures are frozen into `content` when HR approves, so an issued letter never changes.
+model EmployeeLetter {
+  id           String    @id @default(uuid())
+  tenantId     String
+  employeeId   String
+  kind         String // SALARY | EMPLOYMENT
+  addressee    String
+  purpose      String?
+  status       String    @default("PENDING") // PENDING | APPROVED | REJECTED
+  number       String?
+  content      Json?
+  decidedBy    String?
+  decidedAt    DateTime?
+  decisionNote String?
+  createdAt    DateTime  @default(now())
+
+  @@index([tenantId, employeeId])
   @@index([tenantId, status])
 }
 

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Shares the running demo over the internet with Cloudflare quick tunnels (no account or domain needed).
-#   ./tunnel.sh        start: opens 5 tunnels, rebuilds the web apps to use them, prints the links
+#   ./tunnel.sh        start: opens 6 tunnels, rebuilds the web apps to use them, prints the links
 #   ./tunnel.sh stop   close the tunnels and switch back to the normal LAN addresses
 # While tunnels are open, `source .tunnel/env` before rebuilding single services, or they revert to LAN addresses.
 # Requires: cloudflared on PATH, docker compose stack already set up (docker/.env). Links change every start.
 set -euo pipefail
 cd "$(dirname "$0")"
 D=.tunnel; mkdir -p $D
-ports=(api:3000 backoffice:8080 pos:8081 storefront:8082 careers:8083)
+ports=(api:3000 backoffice:8080 pos:8081 storefront:8082 careers:8083 portal:8084)
 
 stop() {
   for f in $D/*.pid; do [ -f "$f" ] && kill "$(cat "$f")" 2>/dev/null || true; done
@@ -16,7 +16,7 @@ stop() {
 
 if [ "${1:-}" = stop ]; then
   stop
-  (cd docker && docker compose up -d --build backend backoffice pos storefront careers)
+  (cd docker && docker compose up -d --build backend backoffice pos storefront careers portal)
   echo "Tunnels closed; apps rebuilt for LAN use."; exit 0
 fi
 
@@ -43,7 +43,7 @@ echo " done"
 
 # The web apps bake in the API address, and the API must allow the apps' origins.
 export API_URL="${url[api]}" TRUST_PROXY=1
-export CORS_EXTRA=",${url[backoffice]},${url[pos]},${url[storefront]},${url[careers]}"
+export CORS_EXTRA=",${url[backoffice]},${url[pos]},${url[storefront]},${url[careers]},${url[portal]}"
 # Saved so a later partial rebuild keeps the tunnel settings: `source .tunnel/env` before any docker compose command.
 printf 'export API_URL=%q TRUST_PROXY=1 CORS_EXTRA=%q\n' "$API_URL" "$CORS_EXTRA" >$D/env
 (cd docker && docker compose up -d --build)
@@ -53,6 +53,7 @@ printf 'export API_URL=%q TRUST_PROXY=1 CORS_EXTRA=%q\n' "$API_URL" "$CORS_EXTRA
   echo "Tablet POS  : ${url[pos]}"
   echo "Storefront  : ${url[storefront]}/demo"
   echo "Careers     : ${url[careers]}/demo"
+  echo "Employees   : ${url[portal]}/?tenant=demo"
   echo "API docs    : ${url[api]}/docs"
   echo "Login       : tenant demo, owner@demo.test, password ChangeMe-12345 (other roles in DEMO.md)"
 } | tee $D/urls.txt

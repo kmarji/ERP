@@ -11,9 +11,10 @@ Server address used below: `192.168.8.12` (the `PUBLIC_HOST` in `docker/.env`). 
 | Tablet POS | http://192.168.8.12:8081 | Cashiers (kitchen display at `/kds`) |
 | Online storefront | http://192.168.8.12:8082/demo | Customers: pick Abdoun (pickup + delivery) or Sweifieh (pickup) |
 | Careers | http://192.168.8.12:8083/demo | Job candidates (one open Barista vacancy) |
+| Employee portal | http://192.168.8.12:8084/?tenant=demo | Employees: clock in/out, leave, certificate letters, payslips. A manager (set on the employee file) also approves their team's leave |
 | API docs (Swagger) | http://192.168.8.12:3000/docs | Technical audience |
 
-If a page says "failed to fetch" from another PC, open ports 3000 and 8080-8083 on the server's firewall.
+If a page says "failed to fetch" from another PC, open ports 3000 and 8080-8084 on the server's firewall.
 
 ## Logins
 Business / tenant: `demo`. Password for every account: `ChangeMe-12345`
@@ -42,7 +43,7 @@ cp docker/.env.example docker/.env           # then set JWT_SECRET, BOOTSTRAP_TO
 cd docker && docker compose up -d --build && cd ..
 ./seed.sh                                    # waits for the backend, then seeds everything below
 ```
-`seed.sh` needs Node 20+ and `npm` on the host (it installs backend dependencies on first run). It is safe to run again: nothing that exists is duplicated or changed, except that menu items without a tax code get S16. A fresh database gets its own POS tablet; **the device id and key are printed once at the end of the seed output**, so copy them into the POS tablet setup below (the id and key shown there belong to the original machine). Then open the firewall for ports 3000 and 8080-8083 if other devices will connect.
+`seed.sh` needs Node 20+ and `npm` on the host (it installs backend dependencies on first run). It is safe to run again: nothing that exists is duplicated or changed, except that menu items without a tax code get S16. A fresh database gets its own POS tablet; **the device id and key are printed once at the end of the seed output**, so copy them into the POS tablet setup below (the id and key shown there belong to the original machine). Then open the firewall for ports 3000 and 8080-8084 if other devices will connect.
 
 ## Seeded data
 - **Users:** the six accounts above, three branches (Abdoun, Sweifieh, Irbid). **Menu:** 3 categories, 8 items. **POS tablet:** Demo Tablet 1 (Abdoun).
