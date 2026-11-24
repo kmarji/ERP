@@ -24,7 +24,8 @@ import { CurrentUser } from '../auth/auth.decorators';
 import { requireStub } from '../integrations/adapter-mode';
 import { DocumentProcessingAdapter, LocalDiskStorage, StorageAdapter, StubDocumentProcessing } from './documents.adapters';
 
-const MAX_BYTES = 15 * 1024 * 1024;
+// Training videos are large; override with MAX_UPLOAD_MB. Files are buffered in memory, so very large limits need more RAM.
+const MAX_BYTES = Number(process.env.MAX_UPLOAD_MB ?? 100) * 1024 * 1024;
 
 @Injectable()
 export class DocumentsService {

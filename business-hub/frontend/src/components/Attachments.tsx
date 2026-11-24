@@ -18,8 +18,18 @@ async function open(a: Attachment) {
   window.open(URL.createObjectURL(new Blob([await res.arrayBuffer()], { type: a.mimeType })), '_blank', 'noopener');
 }
 
+const playable = (m: string) => m.startsWith('video/') || m.startsWith('audio/');
+
 export function AttachmentList({ items, empty }: { items?: Attachment[]; empty?: string }) {
   const [err, setErr] = useState<unknown>(null);
+  const [playing, setPlaying] = useState<{ id: string; url: string; video: boolean } | null>(null);
+  // Videos play in the page; the blob is rebuilt with the vetted type like open() does.
+  const play = async (a: Attachment) => {
+    const res = await fetch(`${BASE}/documents/${a.id}/download`, { headers: { Authorization: `Bearer ${auth.get()}` } });
+    if (!res.ok) throw new ApiError(res.status, res.statusText);
+    if (playing) URL.revokeObjectURL(playing.url);
+    setPlaying({ id: a.id, url: URL.createObjectURL(new Blob([await res.arrayBuffer()], { type: a.mimeType })), video: a.mimeType.startsWith('video/') });
+  };
   if (!items?.length) return empty ? <p className="text-xs text-slate-500">{empty}</p> : null;
   return (
     <div>
@@ -28,7 +38,9 @@ export function AttachmentList({ items, empty }: { items?: Attachment[]; empty?:
         {items.map((a) => (
           <li key={a.id} className="flex items-center gap-2">
             <span className="font-medium">{a.filename}</span><span className="text-xs text-slate-500">{size(a.sizeBytes)}</span>
+            {playable(a.mimeType) && viewable(a.mimeType) && <Button type="button" variant="ghost" onClick={() => play(a).catch(setErr)}>Watch</Button>}
             <Button type="button" variant="ghost" onClick={() => open(a).catch(setErr)}>{viewable(a.mimeType) ? 'Open' : 'Download'}</Button>
+            {playing?.id === a.id && (playing.video ? <video src={playing.url} controls autoPlay className="mt-1 block w-full max-w-xl" /> : <audio src={playing.url} controls autoPlay />)}
           </li>
         ))}
       </ul>
@@ -36,7 +48,7 @@ export function AttachmentList({ items, empty }: { items?: Attachment[]; empty?:
   );
 }
 
-// Managers add any file type (PDF, Word, PowerPoint, Excel, images, video). The server caps a file at 15 MB.
+// Managers add any file type (PDF, Word, PowerPoint, Excel, images, video). The server caps a file at 100 MB (MAX_UPLOAD_MB).
 export function AttachPicker({ value, onChange }: { value: Attachment[]; onChange: (v: Attachment[]) => void }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>(null);
@@ -54,7 +66,7 @@ export function AttachPicker({ value, onChange }: { value: Attachment[]; onChang
       <ErrorBox error={err} />
       {value.map((a) => <div key={a.id} className="flex items-center gap-2 text-sm"><span>{a.filename}</span><span className="text-xs text-slate-500">{size(a.sizeBytes)}</span><Button type="button" variant="ghost" onClick={() => onChange(value.filter((v) => v.id !== a.id))}>Remove</Button></div>)}
       <input type="file" multiple disabled={busy} onChange={(e) => { add(e.target.files); e.target.value = ''; }} className="text-xs" />
-      <p className="text-xs text-slate-500">{busy ? 'Uploading...' : 'Any format: PDF, Word, PowerPoint, Excel, images, video. Up to 15 MB each.'}</p>
+      <p className="text-xs text-slate-500">{busy ? 'Uploading...' : 'Any format: PDF, Word, PowerPoint, Excel, images, video. Up to 100 MB each.'}</p>
     </div>
   );
 }

@@ -84,10 +84,10 @@ function Questions({ code, need }: { code: string; need?: number }) {
         <span className="ms-2 text-xs text-slate-500">Generated questions stay drafts until you approve each one.</span>
         {q.data?.length === 0 ? <Empty>No questions.</Empty> : q.data?.map((x) => (
           <div key={x.id} className="border-t border-slate-100 py-2 text-sm">
-            <div className="flex items-center justify-between gap-2"><span className="font-medium">{x.text}</span><span className="flex items-center gap-1"><StatusBadge status={x.status} />
+            <div className="flex items-center justify-between gap-2"><span dir="auto" className="font-medium">{x.text}</span><span className="flex items-center gap-1"><StatusBadge status={x.status} />
               {x.status !== 'APPROVED' && <Button variant="ghost" onClick={() => decide.mutate({ id: x.id, approve: true })}>Approve</Button>}
               {x.status === 'DRAFT' && <Button variant="ghost" onClick={() => decide.mutate({ id: x.id, approve: false })}>Reject</Button>}</span></div>
-            <ul className="mt-1 text-xs text-slate-600">{(x.options as string[]).map((o, i) => <li key={i}>{i === x.correctIndex ? '✓' : '·'} {o}</li>)}</ul>
+            <ul className="mt-1 text-xs text-slate-600">{(x.options as string[]).map((o, i) => <li dir="auto" key={i}>{i === x.correctIndex ? '✓' : '·'} {o}</li>)}</ul>
             <span className="text-xs text-slate-400">{x.source}</span>
           </div>
         ))}
@@ -95,7 +95,7 @@ function Questions({ code, need }: { code: string; need?: number }) {
       <Card title="Write a question">
         <ErrorBox error={add.error} />
         <form className="space-y-2" onSubmit={(e) => { e.preventDefault(); add.mutate(); }}>
-          <Field label="Question"><Input required minLength={5} value={m.text} onChange={(e) => setM({ ...m, text: e.target.value })} /></Field>
+          <Field label="Question"><Input dir="auto" required minLength={5} value={m.text} onChange={(e) => setM({ ...m, text: e.target.value })} /></Field>
           {m.options.map((o, i) => <div key={i} className="flex items-center gap-2"><input type="radio" name="correct" checked={m.correct === i} onChange={() => setM({ ...m, correct: i })} title="correct answer" /><Input placeholder={`Option ${i + 1}`} value={o} onChange={(e) => setM({ ...m, options: m.options.map((x, j) => (j === i ? e.target.value : x)) })} /></div>)}
           <Button disabled={add.isPending || !m.options[m.correct]}>Add (approved)</Button>
         </form>

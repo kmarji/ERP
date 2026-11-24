@@ -8,10 +8,12 @@ import { dateOnly } from '../../common/time';
 import { AuditService } from '../audit/audit.service';
 
 const HQ_ROLES = ['HR', 'OWNER', 'FINANCE'];
+// Never leaks the encrypted blob or the pay ratios; get() adds the ratios back for HQ roles only.
 const strip = <T extends { sensitive?: unknown }>(e: T) => {
-  const { sensitive: _s, ...rest } = e;
-  return rest;
+  const { sensitive: _s, sscEmployeeRate: _a, sscEmployerRate: _b, sscRateNote: _c, incomeTaxRate: _d, incomeTaxRateNote: _e, ...rest } = e as any;
+  return rest as Omit<T, 'sensitive'>;
 };
+const rates = (e: any) => ({ sscEmployeeRate: e.sscEmployeeRate, sscEmployerRate: e.sscEmployerRate, sscRateNote: e.sscRateNote, incomeTaxRate: e.incomeTaxRate, incomeTaxRateNote: e.incomeTaxRateNote });
 
 @Injectable()
 export class PeopleService {
@@ -67,7 +69,7 @@ export class PeopleService {
       this.prisma.db.trainingAssignment.findMany({ where: { employeeId: id } }),
     ]);
     // Pay is only for HR, owner and finance.
-    return { ...strip(e), activeContract: this.isHq(u) ? contract : contract && { ...contract, salaryBasic: undefined, allowances: undefined }, training };
+    return { ...strip(e), ...(this.isHq(u) ? rates(e) : {}), activeContract: this.isHq(u) ? contract : contract && { ...contract, salaryBasic: undefined, allowances: undefined }, training };
   }
 
   async sensitive(id: string, u: RequestUser) {
@@ -83,6 +85,23 @@ export class PeopleService {
     await this.prisma.db.employee.updateMany({ where: { id }, data });
     await this.audit.record({ action: 'employee.updated', entityType: 'Employee', entityId: id, before: { name: before.name, phone: before.phone, email: before.email }, after: data });
     return strip(await this.prisma.db.employee.findFirstOrThrow({ where: { id } }));
+  }
+
+  // Fixed SSC / income-tax ratios for one employee (fractions). null clears back to the rule set; a set ratio needs a reason.
+  async setPayrollRates(id: string, u: RequestUser, input: { sscEmployeeRate?: number | null; sscEmployerRate?: number | null; sscRateNote?: string | null; incomeTaxRate?: number | null; incomeTaxRateNote?: string | null }) {
+    const before = await this.prisma.db.employee.findFirst({ where: { id } });
+    if (!before) throw new NotFoundException('Employee not found');
+    const sscSet = input.sscEmployeeRate != null || input.sscEmployerRate != null;
+    if (sscSet && !input.sscRateNote?.trim()) throw new BadRequestException('Say why this social security ratio is set (note required)');
+    if (input.incomeTaxRate != null && !input.incomeTaxRateNote?.trim()) throw new BadRequestException('Say why this income tax ratio is set (note required)');
+    const data = {
+      sscEmployeeRate: input.sscEmployeeRate ?? null, sscEmployerRate: input.sscEmployerRate ?? null, sscRateNote: sscSet ? input.sscRateNote!.trim() : null,
+      incomeTaxRate: input.incomeTaxRate ?? null, incomeTaxRateNote: input.incomeTaxRate != null ? input.incomeTaxRateNote!.trim() : null,
+    };
+    await this.prisma.db.employee.updateMany({ where: { id }, data });
+    const pick = (e: typeof data) => ({ ...e, sscEmployeeRate: e.sscEmployeeRate?.toString() ?? null, sscEmployerRate: e.sscEmployerRate?.toString() ?? null, incomeTaxRate: e.incomeTaxRate?.toString() ?? null });
+    await this.audit.record({ action: 'employee.payroll_rates_changed', entityType: 'Employee', entityId: id, before: pick(before as any), after: { ...pick(data as any), by: u.id } });
+    return rates(await this.prisma.db.employee.findFirstOrThrow({ where: { id } }));
   }
 
   // ---------------------------------------------------------------- assignments (one employer, several branches)

@@ -10,6 +10,23 @@ import { ActionsService } from './actions.service';
 import { OpsSettings } from './ops-settings';
 import { branchFilter } from './scope';
 
+// ponytail: Jordan is a fixed UTC+3 (no DST). Per-tenant time zones if the product leaves Jordan.
+const TZ_OFFSET = '+03:00';
+const GRACE_MS = 30 * 60_000;
+
+// Scheduled slots today that are already due and still have no reading. A slot is covered by a reading taken
+// from 30 min before it until 30 min before the next slot (so one reading never covers every earlier slot).
+export function dueSlots(times: string[], readings: Date[], now: Date): string[] {
+  const day = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Amman' }).format(now);
+  const at = (t: string) => new Date(`${day}T${t}:00${TZ_OFFSET}`).getTime();
+  const slots = [...new Set(times)].sort();
+  return slots.filter((t, i) => {
+    const from = at(t) - GRACE_MS;
+    const to = i + 1 < slots.length ? at(slots[i + 1]) - GRACE_MS : Infinity;
+    return at(t) <= now.getTime() && !readings.some((r) => r.getTime() >= from && r.getTime() < to);
+  });
+}
+
 const OPEN = ['OPEN', 'IN_PROGRESS', 'PENDING_VERIFICATION'];
 
 // A58: measurements against thresholds; a breach raises an exception and one corrective action per point until it is closed.
@@ -17,15 +34,24 @@ const OPEN = ['OPEN', 'IN_PROGRESS', 'PENDING_VERIFICATION'];
 export class FoodSafetyService {
   constructor(private readonly prisma: PrismaService, private readonly audit: AuditService, private readonly actions: ActionsService, private readonly exceptions: ExceptionService, private readonly settings: OpsSettings) {}
 
-  points(user: RequestUser, branchId?: string) {
-    return this.prisma.db.foodSafetyPoint.findMany({ where: branchFilter(user, branchId), orderBy: [{ branchId: 'asc' }, { name: 'asc' }] });
+  // Adds today's due-but-unrecorded slots to each scheduled point.
+  private async withDue<T extends { id: string; readingTimes: string[] }>(points: T[]) {
+    const now = new Date();
+    const dayStart = new Date(`${new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Amman' }).format(now)}T00:00:00${TZ_OFFSET}`);
+    const scheduled = points.filter((p) => p.readingTimes.length);
+    const rs = scheduled.length ? await this.prisma.db.foodSafetyReading.findMany({ where: { pointId: { in: scheduled.map((p) => p.id) }, takenAt: { gte: new Date(dayStart.getTime() - GRACE_MS) } }, select: { pointId: true, takenAt: true } }) : [];
+    return points.map((p) => ({ ...p, dueSlots: p.readingTimes.length ? dueSlots(p.readingTimes, rs.filter((r) => r.pointId === p.id).map((r) => r.takenAt), now) : [] }));
   }
 
-  async savePoint(input: { id?: string; branchId: string; name: string; kind: string; unit?: string; minValue?: number | null; maxValue?: number | null; active?: boolean }, user: RequestUser) {
+  async points(user: RequestUser, branchId?: string) {
+    return this.withDue(await this.prisma.db.foodSafetyPoint.findMany({ where: branchFilter(user, branchId), orderBy: [{ branchId: 'asc' }, { name: 'asc' }] }));
+  }
+
+  async savePoint(input: { id?: string; branchId: string; name: string; kind: string; unit?: string; minValue?: number | null; maxValue?: number | null; active?: boolean; readingTimes?: string[] }, user: RequestUser) {
     assertBranchAccess(user, input.branchId, MANAGERS);
     if (input.minValue == null && input.maxValue == null) throw new BadRequestException('Set a minimum, a maximum or both');
     if (input.minValue != null && input.maxValue != null && input.minValue > input.maxValue) throw new BadRequestException('Minimum is above maximum');
-    const data = { name: input.name, kind: input.kind, unit: input.unit ?? 'C', minValue: input.minValue ?? null, maxValue: input.maxValue ?? null, active: input.active ?? true };
+    const data = { name: input.name, kind: input.kind, unit: input.unit ?? 'C', minValue: input.minValue ?? null, maxValue: input.maxValue ?? null, active: input.active ?? true, ...(input.readingTimes ? { readingTimes: [...new Set(input.readingTimes)].sort() } : {}) }; // omitted = keep the current schedule
     let row;
     if (input.id) {
       const cur = await this.prisma.db.foodSafetyPoint.findFirst({ where: { id: input.id } });
@@ -41,7 +67,7 @@ export class FoodSafetyService {
     const me = await employeeOf(this.prisma, user);
     const now = new Date();
     const branches = (await this.prisma.db.employeeAssignment.findMany({ where: { employeeId: me.id, validFrom: { lte: now }, OR: [{ validTo: null }, { validTo: { gte: now } }] } })).map((a) => a.branchId);
-    return this.prisma.db.foodSafetyPoint.findMany({ where: { branchId: { in: branches }, active: true }, orderBy: { name: 'asc' } });
+    return this.withDue(await this.prisma.db.foodSafetyPoint.findMany({ where: { branchId: { in: branches }, active: true }, orderBy: { name: 'asc' } }));
   }
 
   // Staff record at their own branch; managers at the branches they cover.

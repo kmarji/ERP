@@ -2175,6 +2175,12 @@ model Employee {
   // AES-256-GCM encrypted JSON: national id, date of birth, address, bank account. Never returned by list endpoints.
   sensitive         String?
   attendanceProfile Json           @default("{}")
+  // Fixed per-employee ratios (fractions, 0.075 = 7.5%). Null = use the payroll rule set. A note is required when one is set.
+  sscEmployeeRate   Decimal?       @db.Decimal(7, 6)
+  sscEmployerRate   Decimal?       @db.Decimal(7, 6)
+  sscRateNote       String?
+  incomeTaxRate     Decimal?       @db.Decimal(7, 6)
+  incomeTaxRateNote String?
   createdAt         DateTime       @default(now())
 
   assignments EmployeeAssignment[]
@@ -2916,6 +2922,8 @@ model FoodSafetyPoint {
   maxValue  Decimal? @db.Decimal(8, 2)
   active    Boolean  @default(true)
   createdBy String
+  // Scheduled reading times, HH:MM in Jordan local time (empty = unscheduled).
+  readingTimes String[] @default([])
 
   @@index([tenantId, branchId])
 }

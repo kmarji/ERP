@@ -49,6 +49,37 @@ function Directory() {
   );
 }
 
+// Fixed per-employee SSC and income tax ratios. Blank = follow the payroll rule set. Shown and typed as percentages.
+const pct = (v: string | null | undefined) => (v == null ? '' : String(+(Number(v) * 100).toFixed(4)));
+const frac = (v: string) => (v.trim() === '' ? null : Number(v) / 100);
+function RatesCard({ e }: { e: any }) {
+  const qc = useQueryClient();
+  const [f, setF] = useState({ ee: pct(e.sscEmployeeRate), er: pct(e.sscEmployerRate), sscNote: e.sscRateNote ?? '', tax: pct(e.incomeTaxRate), taxNote: e.incomeTaxRateNote ?? '' });
+  const save = useMutation({
+    mutationFn: () => api(`/employees/${e.id}/payroll-rates`, { method: 'PATCH', body: { sscEmployeeRate: frac(f.ee), sscEmployerRate: frac(f.er), sscRateNote: f.sscNote, incomeTaxRate: frac(f.tax), incomeTaxRateNote: f.taxNote } }),
+    onSuccess: () => qc.invalidateQueries(),
+  });
+  const sscSet = f.ee.trim() !== '' || f.er.trim() !== '';
+  const set = (k: keyof typeof f) => (ev: { target: { value: string } }) => setF({ ...f, [k]: ev.target.value });
+  return (
+    <Card title="Payroll ratios (override the company rules for this employee)">
+      <ErrorBox error={save.error} />
+      <form className="space-y-3" onSubmit={(ev: FormEvent) => { ev.preventDefault(); save.mutate(); }}>
+        <div className="flex flex-wrap items-end gap-2">
+          <Field label="SSC employee %"><Input type="number" step="0.01" min="0" max="100" value={f.ee} onChange={set('ee')} placeholder="rule set" /></Field>
+          <Field label="SSC employer %"><Input type="number" step="0.01" min="0" max="100" value={f.er} onChange={set('er')} placeholder="rule set" /></Field>
+          <Field label="Why this SSC ratio"><Input className="w-80" value={f.sscNote} onChange={set('sscNote')} required={sscSet} /></Field>
+        </div>
+        <div className="flex flex-wrap items-end gap-2">
+          <Field label="Income tax % (of gross - SSC)"><Input type="number" step="0.01" min="0" max="100" value={f.tax} onChange={set('tax')} placeholder="rule set" /></Field>
+          <Field label="Why this tax ratio"><Input className="w-80" value={f.taxNote} onChange={set('taxNote')} required={f.tax.trim() !== ''} /></Field>
+        </div>
+        <Button type="submit">Save ratios</Button>
+      </form>
+    </Card>
+  );
+}
+
 function EmployeeDetail({ id }: { id: string }) {
   const { lang } = useI18n();
   const qc = useQueryClient();
@@ -106,6 +137,7 @@ function EmployeeDetail({ id }: { id: string }) {
           <Button type="submit">Add</Button>
         </form>
       </Card>
+      {"sscRateNote" in e && <RatesCard e={e} />}
       <Card title="Contracts">
         <ErrorBox error={contracts.error} />
         <Table head={['Version', 'Type', 'Salary', 'From', 'Status']}>

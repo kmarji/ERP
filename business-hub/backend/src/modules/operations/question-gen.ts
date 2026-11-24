@@ -25,7 +25,7 @@ export class StubQuestionGen extends QuestionGenAdapter {
       const distractors = shuffle(words.filter((w) => w !== key.toLowerCase())).slice(0, 3);
       if (distractors.length < 3) continue;
       const options = shuffle([key.toLowerCase(), ...distractors]);
-      out.push({ text: `Complete the sentence: ${sentence.replace(key, '_____')}`, options, correctIndex: options.indexOf(key.toLowerCase()) });
+      out.push({ text: `${/\p{Script=Arabic}/u.test(sentence) ? 'أكمل الجملة:' : 'Complete the sentence:'} ${sentence.replace(key, '_____')}`, options, correctIndex: options.indexOf(key.toLowerCase()) });
       if (out.length >= count) break;
     }
     return out;

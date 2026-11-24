@@ -440,7 +440,7 @@ function Safety() {
   const acts = useQuery({ queryKey: ['me-actions'], queryFn: () => api<any[]>('/me/actions') });
   const [v, setV] = useState<Record<string, string>>({});
   const [last, setLast] = useState<Record<string, boolean>>({});
-  const rec = useMutation({ mutationFn: (p: any) => api<any>('/me/food-safety/readings', { body: { pointId: p.id, value: Number(v[p.id]) } }), onSuccess: (r, p) => { setLast({ ...last, [p.id]: r.inRange }); setV({ ...v, [p.id]: '' }); qc.invalidateQueries({ queryKey: ['me-actions'] }); } });
+  const rec = useMutation({ mutationFn: (p: any) => api<any>('/me/food-safety/readings', { body: { pointId: p.id, value: Number(v[p.id]) } }), onSuccess: (r, p) => { setLast({ ...last, [p.id]: r.inRange }); setV({ ...v, [p.id]: '' }); qc.invalidateQueries({ queryKey: ['me-actions'] }); qc.invalidateQueries({ queryKey: ['me-fs-points'] }); } });
   const [open, setOpen] = useState<string | null>(null);
   const [fix, setFix] = useState({ note: '', docId: '' });
   const [err, setErr] = useState<unknown>(null);
@@ -452,7 +452,7 @@ function Safety() {
         <ErrorBox error={points.error ?? rec.error} />
         {points.data?.length === 0 ? <Empty>No measurement points at your branch.</Empty> : points.data?.map((p) => (
           <div key={p.id} className="flex flex-wrap items-center gap-2 border-t border-slate-100 py-2 text-sm first:border-0">
-            <span className="w-44 font-medium">{p.name}<span className="block text-xs text-slate-500">allowed {p.minValue ?? '-'} to {p.maxValue ?? '-'} {p.unit}</span></span>
+            <span className="w-44 font-medium">{p.name}<span className="block text-xs text-slate-500">allowed {p.minValue ?? '-'} to {p.maxValue ?? '-'} {p.unit}{p.readingTimes?.length > 0 && <span className="block">scheduled {p.readingTimes.join(', ')}</span>}{p.dueSlots?.length > 0 && <span className="block font-semibold text-amber-700">Due: {p.dueSlots.join(', ')}</span>}</span></span>
             <Input className="w-28" type="number" step="0.1" placeholder={p.unit} value={v[p.id] ?? ''} onChange={(e) => setV({ ...v, [p.id]: e.target.value })} />
             <Button disabled={!v[p.id] || rec.isPending} onClick={() => rec.mutate(p)}>Record</Button>
             {last[p.id] === true && <span className="text-xs text-emerald-700">OK</span>}

@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Param, Post, Query, Res } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsDateString, IsIn, IsInt, IsNumber, IsOptional, IsString, Max, Min, MinLength, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsDateString, IsIn, IsInt, IsNumber, IsOptional, IsString, Matches, Max, Min, MinLength, ValidateNested } from 'class-validator';
 import { RequestUser } from '../../common/tenancy/tenant-context';
 import { CurrentUser, Roles } from '../auth/auth.decorators';
 import { MANAGERS } from '../workforce/common';
@@ -42,6 +42,7 @@ class PointDto {
   @IsOptional() @IsNumber() minValue?: number | null;
   @IsOptional() @IsNumber() maxValue?: number | null;
   @IsOptional() @IsBoolean() active?: boolean;
+  @IsOptional() @IsArray() @ArrayMaxSize(48) @Matches(/^([01]\d|2[0-3]):[0-5]\d$/, { each: true }) readingTimes?: string[];
 }
 class ReadingDto {
   @IsString() pointId!: string;

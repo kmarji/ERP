@@ -78,7 +78,9 @@ function Detail({ id }: { id: string }) {
       </Card>
     );
   }
-  const ready = items.every((i) => ans[i.id]?.result && (ans[i.id].result !== 'FAIL' || ans[i.id].note) && (ans[i.id].result === 'NA' || !i.evidenceRequired || ans[i.id].docId));
+  // Tell the auditor exactly why Complete is disabled instead of leaving a dead button.
+  const missing = items.flatMap((i) => { const a = ans[i.id]; return !a?.result ? [`answer "${i.label}"`] : [...(a.result === 'FAIL' && !a.note?.trim() ? [`say what was wrong on "${i.label}"`] : []), ...(a.result !== 'NA' && i.evidenceRequired && !a.docId ? [`attach evidence for "${i.label}"`] : [])]; });
+  const ready = items.every((i) => ans[i.id]?.result && (ans[i.id].result !== 'FAIL' || ans[i.id].note?.trim()) && (ans[i.id].result === 'NA' || !i.evidenceRequired || ans[i.id].docId));
   return (
     <Card title={`${template.name} v${template.version} · pass at ${template.passPercent}%`}>
       <ErrorBox error={q.error ?? err ?? done.error} />
@@ -94,7 +96,7 @@ function Detail({ id }: { id: string }) {
           </div>
         ))}
       </div>
-      <div className="mt-3"><Button disabled={!ready || done.isPending} onClick={() => done.mutate()}>Complete audit</Button><span className="ms-2 text-xs text-slate-500">Only you, the auditor who started it, can complete it.</span></div>
+      <div className="mt-3"><Button disabled={!ready || done.isPending} onClick={() => done.mutate()}>Complete audit</Button><span className="ms-2 text-xs text-slate-500">Only you, the auditor who started it, can complete it.</span>{missing.length > 0 && <p className="mt-2 text-xs text-amber-700">Still needed: {missing.slice(0, 4).join('; ')}{missing.length > 4 ? ` and ${missing.length - 4} more` : ''}</p>}</div>
     </Card>
   );
 }

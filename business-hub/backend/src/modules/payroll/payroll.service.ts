@@ -152,7 +152,7 @@ export class PayrollService implements OnModuleInit {
         }
       }
 
-      const input = { basic: d(contract.salaryBasic), allowances, periodDays, daysEmployed: days, overtimeMinutes: att.overtimeMinutes, lateMinutes: att.lateMinutes, unpaidLeaveDays: att.unpaidLeaveDays, otherEarnings: other, advanceRecovery: recovery };
+      const input = { basic: d(contract.salaryBasic), allowances, periodDays, daysEmployed: days, overtimeMinutes: att.overtimeMinutes, lateMinutes: att.lateMinutes, unpaidLeaveDays: att.unpaidLeaveDays, otherEarnings: other, advanceRecovery: recovery, sscEmployeeRate: e.sscEmployeeRate?.toNumber() ?? null, sscEmployerRate: e.sscEmployerRate?.toNumber() ?? null, incomeTaxRate: e.incomeTaxRate?.toNumber() ?? null };
       let calc = calculatePay(rules, input);
       if (calc.net.isNegative() && recovery.gt(0)) {
         // never take more than the employee earns: cap recovery and carry the rest

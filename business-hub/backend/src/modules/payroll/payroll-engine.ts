@@ -11,6 +11,10 @@ export interface PayInput {
   unpaidLeaveDays: number;
   otherEarnings: Decimal; // adjustments, retro pay (negative for deductions)
   advanceRecovery: Decimal;
+  // fixed per-employee ratios (fractions); null/undefined = use the rule set
+  sscEmployeeRate?: number | null;
+  sscEmployerRate?: number | null;
+  incomeTaxRate?: number | null;
 }
 
 export interface PayResult {
@@ -73,16 +77,24 @@ export function calculatePay(rules: PayrollRules, i: PayInput): PayResult {
 
   const subject = Decimal.max(d(0), basic.plus(allowances).minus(unpaidLeaveDeduction));
   const capped = rules.ssc.monthlyCeiling === null ? subject : Decimal.min(subject, d(rules.ssc.monthlyCeiling));
-  const sscEmployee = money(capped.times(rules.ssc.employeeRate));
-  const sscEmployer = money(capped.times(rules.ssc.employerRate));
+  const eeRate = i.sscEmployeeRate ?? rules.ssc.employeeRate;
+  const erRate = i.sscEmployerRate ?? rules.ssc.employerRate;
+  const sscEmployee = money(capped.times(eeRate));
+  const sscEmployer = money(capped.times(erRate));
   log('sscSubjectWage', 'basic + allowances - unpaid leave, capped at the ceiling', capped);
-  log('sscEmployee', `${rules.ssc.employeeRate * 100}% of subject wage`, sscEmployee);
-  log('sscEmployer', `${rules.ssc.employerRate * 100}% of subject wage`, sscEmployer);
+  log('sscEmployee', `${d(eeRate).times(100)}%${i.sscEmployeeRate != null ? ' (employee fixed ratio)' : ''} of subject wage`, sscEmployee);
+  log('sscEmployer', `${d(erRate).times(100)}%${i.sscEmployerRate != null ? ' (employee fixed ratio)' : ''} of subject wage`, sscEmployer);
 
   const monthlyTaxable = Decimal.max(d(0), gross.minus(sscEmployee));
-  const annualTaxable = Decimal.max(d(0), monthlyTaxable.times(12).minus(rules.tax.annualExemption).minus(rules.tax.familyExemption));
-  const incomeTax = money(bracketTax(annualTaxable, rules.tax.brackets).div(12));
-  log('incomeTax', `annualized taxable ${annualTaxable} through brackets / 12`, incomeTax);
+  let incomeTax: Decimal;
+  if (i.incomeTaxRate != null) {
+    incomeTax = money(monthlyTaxable.times(i.incomeTaxRate));
+    log('incomeTax', `${d(i.incomeTaxRate).times(100)}% (employee fixed ratio) of gross - employee social security ${monthlyTaxable}`, incomeTax);
+  } else {
+    const annualTaxable = Decimal.max(d(0), monthlyTaxable.times(12).minus(rules.tax.annualExemption).minus(rules.tax.familyExemption));
+    incomeTax = money(bracketTax(annualTaxable, rules.tax.brackets).div(12));
+    log('incomeTax', `annualized taxable ${annualTaxable} through brackets / 12`, incomeTax);
+  }
 
   const advances = money(i.advanceRecovery);
   const net = gross.minus(sscEmployee).minus(incomeTax).minus(advances);

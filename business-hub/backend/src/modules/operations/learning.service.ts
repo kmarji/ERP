@@ -6,6 +6,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { assertBranchAccess } from '../../common/tenancy/branch-scope';
 import { currentTenantId, RequestUser, runWithTenant } from '../../common/tenancy/tenant-context';
 import { AuditService } from '../audit/audit.service';
+import { DocumentsService } from '../documents/documents.module';
 import { NotificationsService } from '../notifications/notifications.module';
 import { employeeOf, MANAGERS, primaryBranch } from '../workforce/common';
 import { QuestionGenAdapter } from './question-gen';
@@ -17,7 +18,7 @@ const shuffle = <T>(a: T[]) => a.map((v) => [Math.random(), v] as const).sort((x
 export class LearningService {
   private readonly log = new Logger(LearningService.name);
 
-  constructor(private readonly prisma: PrismaService, private readonly audit: AuditService, private readonly gen: QuestionGenAdapter, private readonly notes: NotificationsService) {}
+  constructor(private readonly prisma: PrismaService, private readonly audit: AuditService, private readonly gen: QuestionGenAdapter, private readonly notes: NotificationsService, private readonly docs: DocumentsService) {}
 
   private companyWide(user: RequestUser) {
     if (!user.roles.some((r) => r.branchId === null && MANAGERS.includes(r.key as any))) throw new ForbiddenException('Only a company-wide role can change the library, question banks and rules');
@@ -82,7 +83,13 @@ export class LearningService {
     this.companyWide(user);
     const item = await this.prisma.db.libraryItem.findFirst({ where: { code: itemCode, active: true } });
     if (!item) throw new NotFoundException('No active item with that code');
-    const made = await this.gen.generate({ title: item.title, body: item.body, count });
+    // Text can only be read from the written material and plain-text attachments; PDFs, Office files and videos are not parsed.
+    let body = item.body;
+    for (const a of (item.attachments as unknown as Attachment[]) ?? []) {
+      if (/^text\//.test(a.mimeType) || /\.(txt|md|csv)$/i.test(a.filename)) body += `\n${(await this.docs.read(a.id)).data.toString('utf8')}`;
+    }
+    const made = await this.gen.generate({ title: item.title, body, count });
+    if (!made.length) throw new BadRequestException('No questions could be generated: the written material is too short. Paste the key text of the PDF, slides or video into the material box (files and videos are not read), then try again.');
     for (const q of made) this.checkQ(q);
     await this.prisma.db.questionBankItem.createMany({ data: made.map((q) => ({ tenantId: currentTenantId(), itemCode, text: q.text, options: q.options, correctIndex: q.correctIndex, source: this.gen.name, createdBy: user.id })) });
     await this.audit.record({ action: 'question_bank.generated', entityType: 'LibraryItem', entityId: item.id, after: { generator: this.gen.name, drafts: made.length } });

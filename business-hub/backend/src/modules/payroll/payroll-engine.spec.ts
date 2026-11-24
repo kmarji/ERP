@@ -17,6 +17,15 @@ describe('payroll engine', () => {
     expect(r.trace.map((t) => t.step)).toEqual(expect.arrayContaining(['proration', 'gross', 'sscEmployee', 'incomeTax', 'net']));
   });
 
+  it('uses an employee fixed SSC and income tax ratio instead of the rule set', () => {
+    const r = calculatePay(rules, { ...base, sscEmployeeRate: 0.05, sscEmployerRate: 0.1, incomeTaxRate: 0.1 });
+    expect(r.sscEmployee).toEqual(d(35)); // 5% of 700
+    expect(r.sscEmployer).toEqual(d(70));
+    expect(r.incomeTax).toEqual(d('66.5')); // 10% of (700 - 35)
+    expect(r.net).toEqual(d('598.5'));
+    expect(calculatePay(rules, { ...base, sscEmployeeRate: 0 }).sscEmployee).toEqual(d(0)); // zero is a real ratio, not "unset"
+  });
+
   it('applies tax brackets above the exemption', () => {
     const r = calculatePay(rules, { ...base, basic: d(2000), allowances: d(0) });
     // gross 2000, ssc 150, taxable (1850*12)=22200-9000=13200 -> 5000*5% + 5000*10% + 3200*15% = 250+500+480 = 1230 / 12

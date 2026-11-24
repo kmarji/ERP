@@ -2,7 +2,7 @@ import { Body, Controller, Get, Module, Param, Patch, Post, Query } from '@nestj
 import { ConfigService } from '@nestjs/config';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsArray, IsBoolean, IsDateString, IsEmail, IsInt, IsNumber, IsOptional, IsString, Min, MinLength, ValidateNested } from 'class-validator';
+import { IsArray, IsBoolean, IsDateString, IsEmail, IsInt, IsNumber, IsOptional, IsString, Max, Min, MinLength, ValidateNested } from 'class-validator';
 import { FieldCryptoModule } from '../../common/crypto/field-crypto';
 import { RequestUser } from '../../common/tenancy/tenant-context';
 import { CurrentUser, Roles } from '../auth/auth.decorators';
@@ -17,6 +17,14 @@ class PatchDto {
   @IsOptional() @IsString() nameAr?: string;
   @IsOptional() @IsString() phone?: string;
   @IsOptional() @IsEmail() email?: string;
+}
+
+class PayrollRatesDto {
+  @IsOptional() @IsNumber() @Min(0) @Max(1) sscEmployeeRate?: number | null;
+  @IsOptional() @IsNumber() @Min(0) @Max(1) sscEmployerRate?: number | null;
+  @IsOptional() @IsString() sscRateNote?: string | null;
+  @IsOptional() @IsNumber() @Min(0) @Max(1) incomeTaxRate?: number | null;
+  @IsOptional() @IsString() incomeTaxRateNote?: string | null;
 }
 
 class AssignDto {
@@ -91,6 +99,10 @@ class PeopleController {
 
   @Roles(...HR) @Patch('employees/:id') patch(@Param('id') id: string, @Body() dto: PatchDto) {
     return this.people.patch(id, dto);
+  }
+
+  @Roles('HR', 'OWNER', 'FINANCE') @Patch('employees/:id/payroll-rates') payrollRates(@Param('id') id: string, @Body() dto: PayrollRatesDto, @CurrentUser() u: RequestUser) {
+    return this.people.setPayrollRates(id, u, dto);
   }
 
   @Roles(...HR) @Post('employees/:id/assignments') assign(@Param('id') id: string, @Body() dto: AssignDto) {
