@@ -119,7 +119,11 @@ function Home() {
   const open = entries.data?.find((e) => e.status === 'OPEN');
   const [geoDenied, setGeoDenied] = useState(false);
   const [left, setLeft] = useState('');
-  const where = async () => { try { const p = await position(); setGeoDenied(false); return p; } catch { setGeoDenied(true); return {}; } };
+  const [geoWhy, setGeoWhy] = useState('');
+  // Phones often fail the high-accuracy GPS watch (indoors, cold start); fall back to a coarse network/Wi-Fi fix before giving up.
+  const coarse = () => new Promise<{ lat: number; lng: number; accuracy: number }>((ok, no) => navigator.geolocation.getCurrentPosition((p) => ok({ lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy }), no, { enableHighAccuracy: false, maximumAge: 60_000, timeout: 15_000 }));
+  const why = (e: any) => !window.isSecureContext ? 'This page is not on https.' : e?.code === 1 ? 'Location permission is blocked for this site (check the browser and phone settings).' : e?.code === 2 ? 'Your phone could not determine its position; turn on Location/GPS.' : 'Locating timed out; move near a window and try again.';
+  const where = async () => { try { const p = await position().catch(() => coarse()); setGeoDenied(false); return p; } catch (e) { setGeoWhy(why(e)); setGeoDenied(true); return {}; } };
   const go = useMutation({ mutationFn: async (p: string) => api(`/me/${p}`, { method: 'POST', body: p === 'clock-in' ? await where() : {} }), onSuccess: () => { setLeft(''); qc.invalidateQueries({ queryKey: ['time'] }); } });
   // While clocked in, check the phone's position every minute; leaving the branch area clocks the employee out.
   useEffect(() => {
@@ -138,7 +142,7 @@ function Home() {
       <Card title="Clock in / out · تسجيل الحضور">
         <ErrorBox error={go.error} />
         {left && <p className="mb-2 rounded bg-amber-50 p-2 text-sm text-amber-800">{left}</p>}
-        {geoDenied && go.error && <p className="mb-2 text-sm text-amber-700">Your browser did not share your location. Allow location access for this site (needs https) and try again.</p>}
+        {geoDenied && go.error && <p className="mb-2 text-sm text-amber-700">{geoWhy}</p>}
         <div className="flex items-center gap-3">
           {open
             ? <><span className="text-sm">Clocked in since {formatDate(open.clockIn)}</span><Button variant="danger" disabled={go.isPending} onClick={() => go.mutate('clock-out')}>Clock out · خروج</Button></>
