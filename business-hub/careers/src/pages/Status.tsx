@@ -67,7 +67,7 @@ export default function Status() {
         <Card title={t('Online interview', 'المقابلة عبر الإنترنت')}>
           <p className="mb-2 text-sm">{t('Open the link to read how your answers are used, then decide. You may ask for a human interviewer instead.', 'افتح الرابط لتعرف كيف تُستخدم إجاباتك ثم قرر. يمكنك طلب مقابلة مع شخص بدلاً من ذلك.')}</p>
           <p className="mb-2 text-xs text-slate-500">{t('Valid until', 'صالح حتى')} {new Date(d.interview.expiresAt).toLocaleString()}</p>
-          <Link to={d.interview.path} className="inline-block min-h-11 rounded-lg bg-brand-600 px-4 py-2 text-white">{t('Go to the interview', 'الانتقال إلى المقابلة')}</Link>
+          <Link to={`/interview/${d.interview.path.split("/").pop()}`} className="inline-block min-h-11 rounded-lg bg-brand-600 px-4 py-2 text-white">{t('Go to the interview', 'الانتقال إلى المقابلة')}</Link>
         </Card>
       )}
 
