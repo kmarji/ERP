@@ -105,7 +105,7 @@ export class AccountsService {
     const target = await this.prisma.db.user.findFirst({ where: { id: e.userId }, include: { roles: { include: { role: true } } } });
     // Resetting an owner's password would be a takeover path for HR.
     const now = new Date();
-    const delegated = await this.prisma.db.delegation.findMany({ where: { toUserId: e.userId, startsAt: { lte: now }, endsAt: { gte: now }, revokedAt: null } });
+    const delegated = await this.prisma.db.delegation.findMany({ where: { toUserId: e.userId, endsAt: { gte: now }, revokedAt: null } });
     await assertRankBelowHr(this.prisma.db, actorHasRole(u, 'OWNER'), [...(target?.roles.map((r) => r.role.key) ?? []), ...delegated.map((d) => d.roleKey)]);
     if (e.userId === u.id && !actorHasRole(u, 'OWNER')) throw new ForbiddenException('Ask an owner to change your own password here');
     await this.prisma.db.user.updateMany({ where: { id: e.userId }, data: { passwordHash: await bcrypt.hash(password, 10) } });
