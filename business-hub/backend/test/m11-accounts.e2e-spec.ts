@@ -12,7 +12,7 @@ describe('M11 employee accounts: create employee with login, roles, password res
   const post = (path: string, token: string, body: object = {}) => http.post(path).set(auth(token)).send(body);
   const get = (path: string, token: string) => http.get(path).set(auth(token));
   const signIn = (email: string, password: string) => http.post('/auth/login').send({ tenant: T.slug, email, password });
-  const base = () => ({ name: 'Sara Nasser', phone: '0791234567', legalEntityId: T.legalEntityId, branchId, positionId, hireDate: '2026-01-01', salaryBasic: 450 });
+  const base = () => ({ name: 'Sara Nasser', nationality: 'Jordanian', phone: '0791234567', legalEntityId: T.legalEntityId, branchId, positionId, hireDate: '2026-01-01', salaryBasic: 450 });
 
   beforeAll(async () => {
     ({ app, http, prisma } = await createApp());

@@ -2188,6 +2188,12 @@ model Employee {
   positionId        String
   // AES-256-GCM encrypted JSON: national id, date of birth, address, bank account. Never returned by list endpoints.
   sensitive         String?
+  nationality       String?
+  // Work permit: number and expiry stay optional, so a not-yet-started permit shows as incomplete.
+  needsWorkPermit      Boolean   @default(false)
+  workPermitNumber     String?
+  workPermitExpiry     DateTime? @db.Date
+  workPermitAlertStage Int? // last expiry alert sent (60, 30, 7, 0)
   attendanceProfile Json           @default("{}")
   // Fixed per-employee ratios (fractions, 0.075 = 7.5%). Null = use the payroll rule set. A note is required when one is set.
   sscEmployeeRate   Decimal?       @db.Decimal(7, 6)

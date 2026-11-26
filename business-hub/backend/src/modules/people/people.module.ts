@@ -1,8 +1,8 @@
-import { Body, Controller, Get, Module, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Module, Param, Patch, Post, Put, Query } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsArray, IsBoolean, IsDateString, IsEmail, IsIn, IsInt, IsNumber, IsOptional, IsString, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
+import { IsArray, IsBoolean, IsDateString, IsEmail, IsIn, IsInt, IsNumber, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength, ValidateIf, ValidateNested } from 'class-validator';
 import { FieldCryptoModule } from '../../common/crypto/field-crypto';
 import { RequestUser } from '../../common/tenancy/tenant-context';
 import { CurrentUser, Roles } from '../auth/auth.decorators';
@@ -13,6 +13,7 @@ import { PeopleService } from './people.service';
 import { LettersService } from './letters.service';
 import { AccountsService } from './accounts.service';
 import { SscAdapter, SscService, StubSscAdapter } from './ssc.service';
+import { WorkPermitService } from './work-permit.service';
 
 class PatchDto {
   @IsOptional() @IsString() name?: string;
@@ -20,6 +21,18 @@ class PatchDto {
   @IsOptional() @IsString() phone?: string;
   @IsOptional() @IsEmail() email?: string;
   @IsOptional() @IsString() managerId?: string | null;
+  @ValidateIf((o) => o.nationality !== undefined) @IsString() @MinLength(2) @MaxLength(60) nationality?: string;
+  @IsOptional() @IsBoolean() needsWorkPermit?: boolean;
+  @IsOptional() @IsString() @MaxLength(60) workPermitNumber?: string | null;
+  @IsOptional() @IsDateString() workPermitExpiry?: string | null;
+}
+
+// Omitted keeps the stored value, an empty string removes it.
+class SensitiveDto {
+  @ValidateIf((o) => o.nationalId !== undefined && o.nationalId !== '') @IsString() @MinLength(5) @MaxLength(30) nationalId?: string;
+  @ValidateIf((o) => o.dateOfBirth !== undefined && o.dateOfBirth !== '') @IsDateString() dateOfBirth?: string;
+  @ValidateIf((o) => o.address !== undefined) @IsString() @MaxLength(300) address?: string;
+  @ValidateIf((o) => o.iban !== undefined && o.iban !== '') @IsString() @Matches(/^[A-Za-z0-9 ]{10,40}$/) iban?: string;
 }
 
 class PayrollRatesDto {
@@ -38,6 +51,10 @@ class LoginDto {
 class NewEmployeeDto {
   @IsString() @MinLength(2) name!: string;
   @IsOptional() @IsString() nameAr?: string;
+  @IsString() @MinLength(2) @MaxLength(60) nationality!: string;
+  @IsOptional() @IsBoolean() needsWorkPermit?: boolean;
+  @IsOptional() @IsString() @MaxLength(60) workPermitNumber?: string;
+  @IsOptional() @IsDateString() workPermitExpiry?: string;
   @IsString() @MinLength(5) phone!: string;
   @IsOptional() @IsEmail() email?: string;
   @IsString() legalEntityId!: string;
@@ -77,7 +94,7 @@ class EndDto {
 }
 
 class AllowanceDto {
-  @IsString() name!: string;
+  @IsString() @MinLength(1) @MaxLength(60) name!: string;
   @IsNumber() @Min(0) amount!: number;
 }
 
@@ -151,6 +168,10 @@ class PeopleController {
     return this.people.sensitive(id, u);
   }
 
+  @Roles(...HR) @Put('employees/:id/sensitive') setSensitive(@Param('id') id: string, @Body() dto: SensitiveDto, @CurrentUser() u: RequestUser) {
+    return this.people.setSensitive(id, u, dto);
+  }
+
   @Roles(...HR) @Patch('employees/:id') patch(@Param('id') id: string, @Body() dto: PatchDto, @CurrentUser() u: RequestUser) {
     return this.people.patch(id, u, dto);
   }
@@ -221,6 +242,7 @@ class PeopleController {
     AccountsService,
     LettersService,
     SscService,
+    WorkPermitService,
     {
       provide: SscAdapter,
       inject: [ConfigService],

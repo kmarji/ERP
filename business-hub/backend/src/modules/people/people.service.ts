@@ -4,13 +4,15 @@ import { FieldCrypto } from '../../common/crypto/field-crypto';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { assertBranchAccess } from '../../common/tenancy/branch-scope';
 import { actorHasRole, RequestUser } from '../../common/tenancy/tenant-context';
-import { dateOnly } from '../../common/time';
+import { ammanToday, dateOnly } from '../../common/time';
 import { AuditService } from '../audit/audit.service';
+import { permitStatus } from './work-permit';
+import { WorkPermitService } from './work-permit.service';
 
 const HQ_ROLES = ['HR', 'OWNER', 'FINANCE'];
 // Never leaks the encrypted blob or the pay ratios; get() adds the ratios back for HQ roles only.
 const strip = <T extends { sensitive?: unknown }>(e: T) => {
-  const { sensitive: _s, sscEmployeeRate: _a, sscEmployerRate: _b, sscRateNote: _c, incomeTaxRate: _d, incomeTaxRateNote: _e, ...rest } = e as any;
+  const { sensitive: _s, sscEmployeeRate: _a, sscEmployerRate: _b, sscRateNote: _c, incomeTaxRate: _d, incomeTaxRateNote: _e, workPermitAlertStage: _f, ...rest } = e as any;
   return rest as Omit<T, 'sensitive'>;
 };
 const rates = (e: any) => ({ sscEmployeeRate: e.sscEmployeeRate, sscEmployerRate: e.sscEmployerRate, sscRateNote: e.sscRateNote, incomeTaxRate: e.incomeTaxRate, incomeTaxRateNote: e.incomeTaxRateNote });
@@ -21,7 +23,14 @@ export class PeopleService {
     private readonly prisma: PrismaService,
     private readonly crypto: FieldCrypto,
     private readonly audit: AuditService,
+    private readonly permits: WorkPermitService,
   ) {}
+
+  // What a viewer gets for one employee: the badge for everyone, the permit number only for company-wide roles.
+  private view(e: any, u: RequestUser) {
+    const { workPermitNumber, ...rest } = strip(e) as any;
+    return { ...rest, ...(this.isHq(u) ? { workPermitNumber } : {}), permit: permitStatus(e, ammanToday()) };
+  }
 
   // HQ-wide HR/finance/owner see everyone; a branch manager only people assigned to a branch they manage.
   private isHq(u: RequestUser) {
@@ -59,7 +68,7 @@ export class PeopleService {
       orderBy: { number: 'asc' },
       take: 500,
     });
-    return rows.map(strip);
+    return rows.map((e) => this.view(e, u));
   }
 
   async get(id: string, u: RequestUser) {
@@ -69,7 +78,7 @@ export class PeopleService {
       this.prisma.db.trainingAssignment.findMany({ where: { employeeId: id } }),
     ]);
     // Pay is only for HR, owner and finance.
-    return { ...strip(e), ...(this.isHq(u) ? rates(e) : {}), activeContract: this.isHq(u) ? contract : contract && { ...contract, salaryBasic: undefined, allowances: undefined }, training };
+    return { ...this.view(e, u), ...(this.isHq(u) ? rates(e) : {}), activeContract: this.isHq(u) ? contract : contract && { ...contract, salaryBasic: undefined, allowances: undefined }, training };
   }
 
   async sensitive(id: string, u: RequestUser) {
@@ -79,9 +88,38 @@ export class PeopleService {
     return e.sensitive ? this.crypto.decrypt(e.sensitive) : {};
   }
 
-  async patch(id: string, u: RequestUser, data: { name?: string; nameAr?: string; phone?: string; email?: string; managerId?: string | null }) {
+  // Company-wide HR or owner only: changing the IBAN changes where salary is paid. Values never reach the audit trail.
+  async setSensitive(id: string, u: RequestUser, input: { nationalId?: string; dateOfBirth?: string; address?: string; iban?: string }) {
+    if (!u.roles.some((r) => ['HR', 'OWNER'].includes(r.key) && r.branchId === null)) throw new ForbiddenException('Only company-wide HR or the owner can change sensitive details');
+    const e = await this.prisma.db.employee.findFirst({ where: { id } });
+    if (!e) throw new NotFoundException('Employee not found');
+    // A blob that cannot be decrypted throws here, so it is never overwritten.
+    const next: Record<string, string> = e.sensitive ? this.crypto.decrypt(e.sensitive) : {};
+    const fields: string[] = [];
+    for (const key of ['nationalId', 'dateOfBirth', 'address', 'iban'] as const) {
+      let value = input[key]?.trim();
+      if (value === undefined) continue;
+      if (key === 'iban') value = value.replace(/ /g, '').toUpperCase();
+      if (value === (next[key] ?? '')) continue;
+      fields.push(key);
+      if (value) next[key] = value;
+      else delete next[key];
+    }
+    if (fields.length) {
+      await this.prisma.db.$transaction(async (tx) => {
+        await tx.employee.updateMany({ where: { id }, data: { sensitive: this.crypto.encrypt(next) } });
+        await this.audit.record({ action: 'employee.sensitive_changed', entityType: 'Employee', entityId: id, after: { fields, by: u.id } }, tx);
+      });
+    }
+    return next;
+  }
+
+  async patch(id: string, u: RequestUser, input: { name?: string; nameAr?: string; phone?: string; email?: string; managerId?: string | null; nationality?: string; needsWorkPermit?: boolean; workPermitNumber?: string | null; workPermitExpiry?: string | null }) {
+    const { workPermitNumber, workPermitExpiry, ...data } = input;
     const before = await this.prisma.db.employee.findFirst({ where: { id } });
     if (!before) throw new NotFoundException('Employee not found');
+    const permitSent = data.needsWorkPermit !== undefined || workPermitNumber !== undefined || workPermitExpiry !== undefined;
+    if (permitSent && !this.isHq(u)) throw new ForbiddenException('Only company-wide roles can change a work permit');
     if (data.managerId !== undefined && !this.isHq(u)) throw new ForbiddenException('Only company-wide roles can set who an employee reports to');
     if (data.managerId) {
       if (data.managerId === id) throw new BadRequestException('An employee cannot be their own manager');
@@ -89,9 +127,16 @@ export class PeopleService {
       if (!m?.userId || m.status !== 'ACTIVE') throw new BadRequestException('The manager must be an active employee with a login');
       if (m.managerId === id) throw new BadRequestException('That manager already reports to this employee');
     }
-    await this.prisma.db.employee.updateMany({ where: { id }, data });
-    await this.audit.record({ action: 'employee.updated', entityType: 'Employee', entityId: id, before: { name: before.name, phone: before.phone, email: before.email, managerId: before.managerId }, after: data });
-    return strip(await this.prisma.db.employee.findFirstOrThrow({ where: { id } }));
+    // Without the checkbox there is no permit; a new expiry date restarts the alert stages.
+    const needed = data.needsWorkPermit ?? before.needsWorkPermit;
+    const number = !needed ? null : workPermitNumber === undefined ? undefined : workPermitNumber?.trim() || null;
+    const expiry = !needed ? null : workPermitExpiry === undefined ? undefined : workPermitExpiry ? dateOnly(workPermitExpiry) : null;
+    const restart = expiry !== undefined && expiry?.getTime() !== before.workPermitExpiry?.getTime();
+    await this.prisma.db.employee.updateMany({ where: { id }, data: { ...data, workPermitNumber: number, workPermitExpiry: expiry, ...(restart ? { workPermitAlertStage: null } : {}) } });
+    const { name, phone, email, managerId, nationality, needsWorkPermit } = before;
+    await this.audit.record({ action: 'employee.updated', entityType: 'Employee', entityId: id, before: { name, phone, email, managerId, nationality, needsWorkPermit, workPermitNumber: before.workPermitNumber, workPermitExpiry: before.workPermitExpiry }, after: input });
+    await this.permits.alertAfterSave(id);
+    return this.view(await this.prisma.db.employee.findFirstOrThrow({ where: { id } }), u);
   }
 
   // Fixed SSC / income-tax ratios for one employee (fractions). null clears back to the rule set; a set ratio needs a reason.
@@ -149,7 +194,7 @@ export class PeopleService {
       const c = await tx.employmentContract.create({
         data: { tenantId: '', employeeId: id, version: (last?.version ?? 0) + 1, type: input.type ?? prev?.type ?? 'OPEN', startDate: effective, endDate: input.endDate ? dateOnly(input.endDate) : null, salaryBasic: money(input.salaryBasic), allowances: (input.allowances ?? prev?.allowances ?? []) as any, weeklyHours: input.weeklyHours ?? prev?.weeklyHours ?? 48, probationMonths: input.probationMonths ?? 0 },
       });
-      await this.audit.record({ action: 'employee.contract_changed', entityType: 'Employee', entityId: id, before: prev && { version: prev.version, salaryBasic: prev.salaryBasic.toString() }, after: { version: c.version, salaryBasic: c.salaryBasic.toString(), effective: input.effectiveDate, by: u.id } }, tx);
+      await this.audit.record({ action: 'employee.contract_changed', entityType: 'Employee', entityId: id, before: prev && { version: prev.version, salaryBasic: prev.salaryBasic.toString(), allowances: prev.allowances }, after: { version: c.version, salaryBasic: c.salaryBasic.toString(), allowances: c.allowances, effective: input.effectiveDate, by: u.id } }, tx);
       return c;
     });
   }

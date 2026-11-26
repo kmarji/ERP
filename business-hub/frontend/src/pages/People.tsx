@@ -39,7 +39,7 @@ function Directory() {
             {list.data?.map((e) => (
               <tr key={e.id} onClick={() => setSel(e.id)} className={`cursor-pointer hover:bg-slate-50 ${sel === e.id ? 'bg-brand-50' : ''}`}>
                 <td className="px-3 py-2 text-xs">{e.number}</td>
-                <td className="px-3 py-2 font-medium">{e.name}</td>
+                <td className="px-3 py-2 font-medium">{e.name}<PermitBadge permit={e.permit} /></td>
                 <td className="px-3 py-2"><StatusBadge status={e.status} /></td>
                 <td className="px-3 py-2 text-xs">{e.userId ? '✓' : <span className="font-semibold text-amber-700">none</span>}</td>
               </tr>
@@ -47,7 +47,86 @@ function Directory() {
           </Table>
         )}
       </Card>
-      <div className="lg:col-span-3">{adding ? <AddEmployee onDone={(id) => { setAdding(false); setSel(id); }} onCancel={() => setAdding(false)} /> : sel ? <EmployeeDetail id={sel} /> : <Card><Empty>Select an employee.</Empty></Card>}</div>
+      <div className="lg:col-span-3">{adding ? <AddEmployee onDone={(id) => { setAdding(false); setSel(id); }} onCancel={() => setAdding(false)} /> : sel ? <EmployeeDetail key={sel} id={sel} /> : <Card><Empty>Select an employee.</Empty></Card>}</div>
+    </div>
+  );
+}
+
+type Row = { name: string; amount: string };
+const toRows = (a?: { name: string; amount: number }[]): Row[] => (a ?? []).map((x) => ({ name: x.name, amount: String(x.amount) }));
+const fromRows = (rows: Row[]) => rows.map((r) => ({ name: r.name, amount: Number(r.amount) }));
+function Allowances({ rows, onChange }: { rows: Row[]; onChange: (r: Row[]) => void }) {
+  const set = (i: number, k: keyof Row, v: string) => onChange(rows.map((r, j) => (j === i ? { ...r, [k]: v } : r)));
+  return (
+    <div className="space-y-2 sm:col-span-2">
+      <div className="text-xs font-medium text-slate-600">Allowances (JOD per month)</div>
+      {rows.map((r, i) => (
+        <div key={i} className="flex gap-2">
+          <Input required maxLength={60} placeholder="Housing, laundry..." aria-label="Allowance name" value={r.name} onChange={(ev) => set(i, 'name', ev.target.value)} />
+          <Input required type="number" step="0.001" min="0" className="w-32" placeholder="Amount" aria-label="Allowance amount" value={r.amount} onChange={(ev) => set(i, 'amount', ev.target.value)} />
+          <Button type="button" variant="ghost" onClick={() => onChange(rows.filter((_, j) => j !== i))}>Remove</Button>
+        </div>
+      ))}
+      <Button type="button" variant="ghost" onClick={() => onChange([...rows, { name: '', amount: '' }])}>Add allowance</Button>
+    </div>
+  );
+}
+
+type Permit = { needsWorkPermit: boolean; workPermitNumber: string; workPermitExpiry: string };
+const toPermit = (p: Permit) => ({ needsWorkPermit: p.needsWorkPermit, workPermitNumber: p.workPermitNumber || null, workPermitExpiry: p.workPermitExpiry || null });
+function PermitFields({ value, onChange }: { value: Permit; onChange: (p: Permit) => void }) {
+  return (
+    <>
+      <label className="flex items-center gap-2 text-sm sm:col-span-2"><input type="checkbox" checked={value.needsWorkPermit} onChange={(ev) => onChange({ ...value, needsWorkPermit: ev.target.checked })} /> Requires a work permit</label>
+      {value.needsWorkPermit && <>
+        <Field label="Work permit number (optional)"><Input maxLength={60} value={value.workPermitNumber} onChange={(ev) => onChange({ ...value, workPermitNumber: ev.target.value })} /></Field>
+        <Field label="Work permit expiry date (optional)"><Input type="date" value={value.workPermitExpiry} onChange={(ev) => onChange({ ...value, workPermitExpiry: ev.target.value })} /></Field>
+      </>}
+    </>
+  );
+}
+
+function PermitBadge({ permit }: { permit?: { state: 'INCOMPLETE' | 'EXPIRED' | 'EXPIRING'; daysLeft: number | null } | null }) {
+  if (!permit) return null;
+  const text = permit.state === 'INCOMPLETE' ? 'Work permit incomplete' : permit.state === 'EXPIRED' ? 'Permit expired' : `Permit expires in ${permit.daysLeft} days`;
+  return <span className={`ms-2 inline-block rounded px-2 py-0.5 text-xs font-semibold ${permit.state === 'EXPIRING' ? 'bg-amber-100 text-amber-800' : 'bg-red-100 text-red-700'}`}>{text}</span>;
+}
+
+function PermitCard({ e }: { e: any }) {
+  const qc = useQueryClient();
+  const [nationality, setNationality] = useState(e.nationality ?? '');
+  const [p, setP] = useState<Permit>({ needsWorkPermit: e.needsWorkPermit, workPermitNumber: e.workPermitNumber ?? '', workPermitExpiry: e.workPermitExpiry?.slice(0, 10) ?? '' });
+  // Branch-scoped HR does not receive the number, so the permit is only editable when it was sent.
+  const full = 'workPermitNumber' in e;
+  const save = useMutation({ mutationFn: () => api(`/employees/${e.id}`, { method: 'PATCH', body: { nationality: nationality || undefined, ...(full ? toPermit(p) : {}) } }), onSuccess: () => qc.invalidateQueries() });
+  return (
+    <Card title="Nationality and work permit">
+      <ErrorBox error={save.error} />
+      <form className="grid gap-2 sm:grid-cols-2" onSubmit={(ev: FormEvent) => { ev.preventDefault(); save.mutate(); }}>
+        <Field label="Nationality"><Input minLength={2} maxLength={60} value={nationality} onChange={(ev) => setNationality(ev.target.value)} /></Field>
+        {full && <PermitFields value={p} onChange={setP} />}
+        <div className="flex items-center gap-2 sm:col-span-2"><Button disabled={save.isPending}>Save</Button>{save.isSuccess && <span className="text-xs text-emerald-700">Saved.</span>}</div>
+      </form>
+    </Card>
+  );
+}
+
+const SENSITIVE = [['nationalId', 'National id', 'text'], ['dateOfBirth', 'Date of birth', 'date'], ['address', 'Address', 'text'], ['iban', 'IBAN (salary account)', 'text']] as const;
+function SensitiveCard({ id }: { id: string }) {
+  const [f, setF] = useState<Record<string, string> | null>(null);
+  const load = useMutation({ mutationFn: () => api<Record<string, string>>(`/employees/${id}/sensitive`), onSuccess: (r) => { save.reset(); setF(r); } });
+  // All four are sent: an emptied box removes that value.
+  const save = useMutation({ mutationFn: () => api<Record<string, string>>(`/employees/${id}/sensitive`, { method: 'PUT', body: Object.fromEntries(SENSITIVE.map(([k]) => [k, f?.[k] ?? ''])) }), onSuccess: setF });
+  return (
+    <div className="mt-3 rounded border border-amber-200 bg-amber-50 p-3 text-sm">
+      <ErrorBox error={load.error ?? save.error} />
+      <p className="mb-2 text-amber-800">National id, date of birth, address and bank details are encrypted. Viewing and changing them is recorded in the audit trail with your name.</p>
+      {!f ? <Button variant="ghost" onClick={() => load.mutate()}>View sensitive details</Button> : (
+        <form className="grid gap-2 sm:grid-cols-2" onSubmit={(ev: FormEvent) => { ev.preventDefault(); save.mutate(); }}>
+          {SENSITIVE.map(([k, label, type]) => <Field key={k} label={label}><Input type={type} value={(type === 'date' ? f[k]?.slice(0, 10) : f[k]) ?? ''} onChange={(ev) => { save.reset(); setF({ ...f, [k]: ev.target.value }); }} /></Field>)}
+          <div className="flex items-center gap-2 sm:col-span-2"><Button disabled={save.isPending}>Save changes</Button><Button type="button" variant="ghost" onClick={() => setF(null)}>Hide</Button>{save.isSuccess && <span className="text-xs text-emerald-700">Saved.</span>}</div>
+        </form>
+      )}
     </div>
   );
 }
@@ -60,10 +139,12 @@ function AddEmployee({ onDone, onCancel }: { onDone: (id: string) => void; onCan
   const positions = useList('/recruitment/positions');
   const roles = useList('/roles');
   const emps = useQuery({ queryKey: ['employees', ''], queryFn: () => api<any[]>('/employees') });
-  const [f, setF] = useState({ name: '', nameAr: '', phone: '', legalEntityId: '', branchId: '', positionId: '', hireDate: ymdNow(), salaryBasic: '', managerId: '', email: '', password: '', roleKey: 'EMPLOYEE', login: true });
+  const [f, setF] = useState({ name: '', nameAr: '', phone: '', legalEntityId: '', branchId: '', positionId: '', hireDate: ymdNow(), salaryBasic: '', managerId: '', email: '', password: '', roleKey: 'EMPLOYEE', login: true, nationality: '' });
+  const [allow, setAllow] = useState<Row[]>([]);
+  const [permit, setPermit] = useState<Permit>({ needsWorkPermit: false, workPermitNumber: '', workPermitExpiry: '' });
   const set = (k: string) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
   const save = useMutation({
-    mutationFn: () => api<any>('/employees', { body: { name: f.name, nameAr: f.nameAr || undefined, phone: f.phone, email: f.email || undefined, legalEntityId: f.legalEntityId, branchId: f.branchId, positionId: f.positionId, hireDate: f.hireDate, salaryBasic: Number(f.salaryBasic), managerId: f.managerId || undefined, login: f.login ? { email: f.email, password: f.password, roleKey: f.roleKey } : undefined } }),
+    mutationFn: () => api<any>('/employees', { body: { name: f.name, nationality: f.nationality, needsWorkPermit: permit.needsWorkPermit, workPermitNumber: permit.workPermitNumber || undefined, workPermitExpiry: permit.workPermitExpiry || undefined, allowances: fromRows(allow), nameAr: f.nameAr || undefined, phone: f.phone, email: f.email || undefined, legalEntityId: f.legalEntityId, branchId: f.branchId, positionId: f.positionId, hireDate: f.hireDate, salaryBasic: Number(f.salaryBasic), managerId: f.managerId || undefined, login: f.login ? { email: f.email, password: f.password, roleKey: f.roleKey } : undefined } }),
     onSuccess: (r) => { qc.invalidateQueries(); onDone(r.id); },
   });
   return (
@@ -73,11 +154,14 @@ function AddEmployee({ onDone, onCancel }: { onDone: (id: string) => void; onCan
         <Field label="Name"><Input required minLength={2} value={f.name} onChange={set('name')} /></Field>
         <Field label="Name (Arabic)"><Input dir="rtl" value={f.nameAr} onChange={set('nameAr')} /></Field>
         <Field label="Phone"><Input required minLength={5} value={f.phone} onChange={set('phone')} /></Field>
+        <Field label="Nationality"><Input required minLength={2} maxLength={60} value={f.nationality} onChange={set('nationality')} /></Field>
         <Field label="Hire date"><Input type="date" required value={f.hireDate} onChange={set('hireDate')} /></Field>
         <Field label="Legal entity"><Select required value={f.legalEntityId} onChange={set('legalEntityId')}><option value="">Select...</option>{entities.data?.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</Select></Field>
         <Field label="Branch"><Select required value={f.branchId} onChange={set('branchId')}><option value="">Select...</option>{branches.data?.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</Select></Field>
         <Field label="Position"><Select required value={f.positionId} onChange={set('positionId')}><option value="">Select...</option>{positions.data?.map((x) => <option key={x.id} value={x.id}>{x.title}</option>)}</Select></Field>
         <Field label="Basic salary (JOD)"><Input type="number" step="0.001" min="0" required value={f.salaryBasic} onChange={set('salaryBasic')} /></Field>
+        <Allowances rows={allow} onChange={setAllow} />
+        <PermitFields value={permit} onChange={setPermit} />
         <Field label="Reports to (approves leave)"><Select value={f.managerId} onChange={set('managerId')}><option value="">Nobody</option>{emps.data?.filter((x) => x.status === 'ACTIVE' && x.userId).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</Select></Field>
         <label className="flex items-center gap-2 self-end text-sm sm:col-span-2"><input type="checkbox" checked={f.login} onChange={(e) => setF({ ...f, login: e.target.checked })} /> Create a login (username = email, used in the employee portal)</label>
         {f.login && <>
@@ -220,16 +304,17 @@ function EmployeeDetail({ id }: { id: string }) {
   const contracts = useQuery({ queryKey: ['contracts', id], queryFn: () => api<any[]>(`/employees/${id}/contracts`), retry: false });
   const training = useQuery({ queryKey: ['training', id], queryFn: () => api<any[]>(`/employees/${id}/training`) });
   const ssc = useQuery({ queryKey: ['ssc', 'all'], queryFn: () => api<any[]>('/ssc/actions'), retry: false });
-  const [sens, setSens] = useState<any>(null);
   const [asg, setAsg] = useState({ branchId: '', validFrom: '', isPrimary: false });
   const [con, setCon] = useState({ effectiveDate: '', salaryBasic: '', weeklyHours: '' });
+  // null = untouched, so the form shows (and saves) the current contract's allowances.
+  const [conAllow, setConAllow] = useState<Row[] | null>(null);
   const [trainItem, setTrainItem] = useState('');
   const library = useQuery({ queryKey: ['lib'], queryFn: () => api<any[]>('/ops/library'), retry: false });
   const refresh = () => qc.invalidateQueries();
-  const sensitive = useMutation({ mutationFn: () => api(`/employees/${id}/sensitive`), onSuccess: setSens });
   const addAsg = useMutation({ mutationFn: () => api(`/employees/${id}/assignments`, { body: { branchId: asg.branchId, validFrom: asg.validFrom, isPrimary: asg.isPrimary } }), onSuccess: refresh });
   const endAsg = useMutation({ mutationFn: (aid: string) => api(`/employees/${id}/assignments/${aid}/end`, { body: {} }), onSuccess: refresh });
-  const newCon = useMutation({ mutationFn: () => api(`/employees/${id}/contracts`, { body: { effectiveDate: con.effectiveDate, salaryBasic: Number(con.salaryBasic), weeklyHours: con.weeklyHours ? Number(con.weeklyHours) : undefined } }), onSuccess: refresh });
+  const newCon = useMutation({ mutationFn: () => api(`/employees/${id}/contracts`, { body: { effectiveDate: con.effectiveDate, salaryBasic: Number(con.salaryBasic), allowances: conAllow ? fromRows(conAllow) : undefined, weeklyHours: con.weeklyHours ? Number(con.weeklyHours) : undefined } }), onSuccess: () => { setConAllow(null); refresh(); } });
+  const currentAllow = conAllow ?? toRows(contracts.data?.find((c) => c.status === 'ACTIVE')?.allowances);
   const doneTr = useMutation({ mutationFn: (tid: string) => api(`/training/${tid}/complete`, { method: 'POST' }), onSuccess: refresh });
   const addTr = useMutation({ mutationFn: () => api(`/employees/${id}/training`, { body: { itemId: trainItem } }), onSuccess: () => { setTrainItem(''); refresh(); } });
   const e = emp.data;
@@ -237,18 +322,10 @@ function EmployeeDetail({ id }: { id: string }) {
   const mine = ssc.data?.filter((a) => a.employeeId === id) ?? [];
   return (
     <div className="space-y-4">
-      <ErrorBox error={sensitive.error ?? addAsg.error ?? endAsg.error ?? newCon.error ?? doneTr.error ?? addTr.error} />
-      <Card title={`${e.name} · ${e.number}`}>
+      <ErrorBox error={addAsg.error ?? endAsg.error ?? newCon.error ?? doneTr.error ?? addTr.error} />
+      <Card title={<>{e.name} · {e.number}<PermitBadge permit={e.permit} /></>}>
         <p className="text-sm"><StatusBadge status={e.status} /> hired {formatDate(e.hireDate)} · {e.phone} {e.email}</p>
-        <div className="mt-3 rounded border border-amber-200 bg-amber-50 p-3 text-sm">
-          <p className="mb-2 text-amber-800">National id, date of birth, address and bank details are encrypted. Viewing them is recorded in the audit trail with your name.</p>
-          {!sens ? <Button variant="ghost" onClick={() => sensitive.mutate()}>View sensitive details</Button> : (
-            <>
-              <pre className="rounded bg-white p-2 text-xs">{JSON.stringify(sens, null, 2)}</pre>
-              <Button variant="ghost" className="mt-2" onClick={() => setSens(null)}>Hide</Button>
-            </>
-          )}
-        </div>
+        {"sscRateNote" in e && <SensitiveCard id={id} />}
       </Card>
       <Card title="Assignments (branches)">
         <Table head={['Branch', 'Primary', 'From', 'To', '']}>
@@ -269,16 +346,17 @@ function EmployeeDetail({ id }: { id: string }) {
           <Button type="submit">Add</Button>
         </form>
       </Card>
+      {"sscRateNote" in e && <PermitCard e={e} />}
       <ManagerCard e={e} />
       {"sscRateNote" in e && <AccessCard e={e} />}
       {"sscRateNote" in e && <RatesCard e={e} />}
       <Card title="Contracts">
         <ErrorBox error={contracts.error} />
-        <Table head={['Version', 'Type', 'Salary', 'From', 'Status']}>
+        <Table head={['Version', 'Type', 'Basic salary', 'Allowances', 'From', 'Status']}>
           {contracts.data?.map((c) => (
             <tr key={c.id}>
               <td className="px-3 py-2">v{c.version}</td><td className="px-3 py-2">{c.type}</td>
-              <td className="px-3 py-2">{formatJOD(c.salaryBasic, lang)}</td><td className="px-3 py-2 text-xs">{formatDate(c.startDate)}</td>
+              <td className="px-3 py-2">{formatJOD(c.salaryBasic, lang)}</td><td className="px-3 py-2 text-xs">{c.allowances?.map((a: any) => `${a.name} ${formatJOD(a.amount, lang)}`).join(', ') || '—'}</td><td className="px-3 py-2 text-xs">{formatDate(c.startDate)}</td>
               <td className="px-3 py-2"><Badge>{c.status}</Badge></td>
             </tr>
           ))}
@@ -287,6 +365,7 @@ function EmployeeDetail({ id }: { id: string }) {
           <Field label="Effective date"><Input type="date" value={con.effectiveDate} onChange={(ev) => setCon({ ...con, effectiveDate: ev.target.value })} required /></Field>
           <Field label="Basic salary (JOD)"><Input type="number" step="0.001" value={con.salaryBasic} onChange={(ev) => setCon({ ...con, salaryBasic: ev.target.value })} required /></Field>
           <Field label="Weekly hours"><Input type="number" value={con.weeklyHours} onChange={(ev) => setCon({ ...con, weeklyHours: ev.target.value })} /></Field>
+          <div className="w-full"><Allowances rows={currentAllow} onChange={setConAllow} /></div>
           <Button type="submit">New version</Button>
         </form>
       </Card>

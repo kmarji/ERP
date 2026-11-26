@@ -5,9 +5,12 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { SequenceService } from '../../common/prisma/sequence.service';
 import { actorHasRole, RequestUser } from '../../common/tenancy/tenant-context';
 import { AuditService } from '../audit/audit.service';
+import { WorkPermitService } from './work-permit.service';
+import { dateOnly } from '../../common/time';
 
 export interface NewEmployee {
   name: string; nameAr?: string; phone: string; email?: string;
+  nationality: string; needsWorkPermit?: boolean; workPermitNumber?: string; workPermitExpiry?: string;
   legalEntityId: string; branchId: string; positionId: string; hireDate: string;
   contractType?: string; salaryBasic: number; allowances?: { name: string; amount: number }[]; weeklyHours?: number;
   managerId?: string;
@@ -17,7 +20,7 @@ export interface NewEmployee {
 // Creating employees and their logins. Company-wide HR or owner only: a login carries a role, so it is a permission decision.
 @Injectable()
 export class AccountsService {
-  constructor(private readonly prisma: PrismaService, private readonly audit: AuditService, private readonly sequences: SequenceService) {}
+  constructor(private readonly prisma: PrismaService, private readonly audit: AuditService, private readonly sequences: SequenceService, private readonly permits: WorkPermitService) {}
 
   private assertHq(u: RequestUser) {
     if (!(u.roles.some((r) => ['HR', 'OWNER'].includes(r.key) && r.branchId === null))) throw new ForbiddenException('Only company-wide HR or the owner can manage logins');
@@ -57,7 +60,7 @@ export class AccountsService {
     const hire = new Date(`${dto.hireDate.slice(0, 10)}T00:00:00.000Z`);
     const id = await this.prisma.db.$transaction(async (tx) => {
       const number = await this.sequences.next('EMP', 'EMP', tx);
-      const emp = await tx.employee.create({ data: { tenantId: '', number, legalEntityId: entity.id, name: dto.name, nameAr: dto.nameAr ?? null, phone: dto.phone, email: (dto.email ?? dto.login?.email)?.toLowerCase() ?? null, status: hire <= new Date() ? 'ACTIVE' : 'ONBOARDING', hireDate: hire, positionId: position.id, managerId: dto.managerId ?? null } });
+      const emp = await tx.employee.create({ data: { tenantId: '', number, legalEntityId: entity.id, name: dto.name, nameAr: dto.nameAr ?? null, nationality: dto.nationality, needsWorkPermit: !!dto.needsWorkPermit, workPermitNumber: (dto.needsWorkPermit && dto.workPermitNumber?.trim()) || null, workPermitExpiry: dto.needsWorkPermit && dto.workPermitExpiry ? dateOnly(dto.workPermitExpiry) : null, phone: dto.phone, email: (dto.email ?? dto.login?.email)?.toLowerCase() ?? null, status: hire <= new Date() ? 'ACTIVE' : 'ONBOARDING', hireDate: hire, positionId: position.id, managerId: dto.managerId ?? null } });
       await tx.employeeAssignment.create({ data: { tenantId: '', employeeId: emp.id, branchId: branch.id, isPrimary: true, validFrom: hire } });
       await tx.employmentContract.create({ data: { tenantId: '', employeeId: emp.id, version: 1, type: dto.contractType ?? 'PERMANENT', startDate: hire, salaryBasic: dto.salaryBasic, allowances: dto.allowances ?? [], weeklyHours: dto.weeklyHours ?? 48 } });
       if (dto.login) {
@@ -67,6 +70,7 @@ export class AccountsService {
       await this.audit.record({ action: 'employee.created_manually', entityType: 'Employee', entityId: emp.id, after: { number, login: !!dto.login, roleKey: dto.login?.roleKey ?? 'EMPLOYEE' } }, tx);
       return emp.id;
     });
+    await this.permits.alertAfterSave(id);
     return this.prisma.db.employee.findFirstOrThrow({ where: { id }, select: { id: true, number: true, name: true, status: true, userId: true } });
   }
 
