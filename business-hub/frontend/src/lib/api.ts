@@ -56,3 +56,10 @@ export async function download(path: string, filename: string) {
   a.click();
   URL.revokeObjectURL(url);
 }
+
+// Fetches a protected file as an object URL (for <img>); the caller revokes it.
+export async function blobUrl(path: string) {
+  const res = await fetch(`${BASE}${path}`, { headers: { Authorization: `Bearer ${auth.get()}` } });
+  if (!res.ok) throw new ApiError(res.status, res.statusText);
+  return URL.createObjectURL(await res.blob());
+}

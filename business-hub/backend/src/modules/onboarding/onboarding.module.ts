@@ -4,7 +4,7 @@ import { ApiBearerAuth, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { Transform, Type } from 'class-transformer';
 import { compactIban, IBAN } from '../../common/iban';
-import { IsArray, IsBoolean, IsDateString, IsIn, IsInt, IsNumber, IsOptional, IsString, Matches, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
+import { IsArray, IsBoolean, IsDateString, IsIn, IsInt, IsNumber, IsOptional, IsString, Matches, MaxLength, Max, Min, MinLength, ValidateNested } from 'class-validator';
 import { RequestUser } from '../../common/tenancy/tenant-context';
 import { CurrentUser, Public, Roles } from '../auth/auth.decorators';
 import { OperationsModule } from '../operations/operations.module';
@@ -21,7 +21,7 @@ class OfferDto {
   @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => AllowanceDto) allowances?: AllowanceDto[];
   @IsOptional() @IsIn(['OPEN', 'FIXED_TERM']) contractType?: 'OPEN' | 'FIXED_TERM';
   @IsOptional() @IsDateString() endDate?: string;
-  @IsOptional() @IsInt() @Min(0) probationMonths?: number;
+  @IsOptional() @IsInt() @Min(0) @Max(24) probationMonths?: number;
   @IsOptional() @IsNumber() @Min(1) weeklyHours?: number;
 }
 

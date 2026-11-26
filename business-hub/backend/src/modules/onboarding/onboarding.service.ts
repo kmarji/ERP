@@ -325,6 +325,7 @@ export class OnboardingService {
           status: startsNow ? 'ACTIVE' : 'ONBOARDING',
           hireDate: offer.startDate,
           positionId: position.id,
+          probationMonths: offer.probationMonths,
           sensitive: personalEnc, // already encrypted when the candidate entered it: no re-entry, no plaintext copy
           attendanceProfile: { weeklyHours: Number(offer.weeklyHours), scheduleType: 'ROSTER', clockMethod: 'MANUAL', breakMinutes: 30 },
         },
@@ -363,7 +364,7 @@ export class OnboardingService {
   }
 
   private async employeeView(id: string) {
-    const { sensitive: _s, ...e } = await this.prisma.db.employee.findFirstOrThrow({ where: { id }, include: { assignments: true, contracts: true } });
+    const { sensitive: _s, gender: _g, maritalStatus: _m, photoKey: _k, photoType: _t, ...e } = await this.prisma.db.employee.findFirstOrThrow({ where: { id }, include: { assignments: true, contracts: true } });
     return e;
   }
 }

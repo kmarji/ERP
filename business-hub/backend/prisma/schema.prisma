@@ -2194,6 +2194,15 @@ model Employee {
   workPermitNumber     String?
   workPermitExpiry     DateTime? @db.Date
   workPermitAlertStage Int? // last expiry alert sent (60, 30, 7, 0)
+  gender               String? // MALE | FEMALE
+  maritalStatus        String? // SINGLE | MARRIED | DIVORCED | WIDOWED
+  workType             String? // FULL_TIME | PART_TIME | TEMPORARY
+  department           String?
+  section              String?
+  workLocation         String?
+  probationMonths      Int       @default(3) // on the employee, so a new salary package does not move it
+  photoKey             String? // storage key; served only through /employees/:id/photo
+  photoType            String?
   attendanceProfile Json           @default("{}")
   // Fixed per-employee ratios (fractions, 0.075 = 7.5%). Null = use the payroll rule set. A note is required when one is set.
   sscEmployeeRate   Decimal?       @db.Decimal(7, 6)

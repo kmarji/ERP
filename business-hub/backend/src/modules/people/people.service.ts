@@ -3,16 +3,20 @@ import { money } from '../../common/money';
 import { FieldCrypto } from '../../common/crypto/field-crypto';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { assertBranchAccess } from '../../common/tenancy/branch-scope';
-import { actorHasRole, RequestUser } from '../../common/tenancy/tenant-context';
+import { actorHasRole, currentTenantId, RequestUser } from '../../common/tenancy/tenant-context';
 import { ammanToday, dateOnly } from '../../common/time';
 import { AuditService } from '../audit/audit.service';
 import { permitStatus } from './work-permit';
+import { StorageAdapter } from '../documents/documents.adapters';
+import { addMonths, employmentPeriod } from './profile';
+import { Profile, PROFILE, profileData } from './profile-fields';
 import { WorkPermitService } from './work-permit.service';
 
 const HQ_ROLES = ['HR', 'OWNER', 'FINANCE'];
+const IMAGE_TYPES: [string, Buffer][] = [['image/jpeg', Buffer.from([0xff, 0xd8, 0xff])], ['image/png', Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])]];
 // Never leaks the encrypted blob or the pay ratios; get() adds the ratios back for HQ roles only.
 const strip = <T extends { sensitive?: unknown }>(e: T) => {
-  const { sensitive: _s, sscEmployeeRate: _a, sscEmployerRate: _b, sscRateNote: _c, incomeTaxRate: _d, incomeTaxRateNote: _e, workPermitAlertStage: _f, ...rest } = e as any;
+  const { sensitive: _s, sscEmployeeRate: _a, sscEmployerRate: _b, sscRateNote: _c, incomeTaxRate: _d, incomeTaxRateNote: _e, workPermitAlertStage: _f, gender: _g, maritalStatus: _h, photoKey: _i, photoType: _j, ...rest } = e as any;
   return rest as Omit<T, 'sensitive'>;
 };
 const rates = (e: any) => ({ sscEmployeeRate: e.sscEmployeeRate, sscEmployerRate: e.sscEmployerRate, sscRateNote: e.sscRateNote, incomeTaxRate: e.incomeTaxRate, incomeTaxRateNote: e.incomeTaxRateNote });
@@ -24,12 +28,21 @@ export class PeopleService {
     private readonly crypto: FieldCrypto,
     private readonly audit: AuditService,
     private readonly permits: WorkPermitService,
+    private readonly storage: StorageAdapter,
   ) {}
 
   // What a viewer gets for one employee: the badge for everyone, the permit number only for company-wide roles.
   private view(e: any, u: RequestUser) {
     const { workPermitNumber, ...rest } = strip(e) as any;
-    return { ...rest, ...(this.isHq(u) ? { workPermitNumber } : {}), permit: permitStatus(e, ammanToday()) };
+    const today = ammanToday();
+    return {
+      ...rest,
+      ...(this.isHq(u) ? { workPermitNumber, gender: e.gender, maritalStatus: e.maritalStatus } : {}),
+      permit: permitStatus(e, today),
+      hasPhoto: !!e.photoKey,
+      probationEnd: addMonths(e.hireDate, e.probationMonths).toISOString().slice(0, 10),
+      employmentPeriod: employmentPeriod(e.hireDate, e.terminationDate ?? today),
+    };
   }
 
   // Changing sensitive details needs a direct company-wide HR or owner role (a delegation is not enough).
@@ -78,13 +91,16 @@ export class PeopleService {
 
   async get(id: string, u: RequestUser) {
     const e = await this.assertCanSee(id, u);
-    const [contract, training] = await Promise.all([
+    // Names are sent with the record: not every viewer may list positions or all employees.
+    const [position, manager, contract, training] = await Promise.all([
+      this.prisma.db.jobPosition.findFirst({ where: { id: e.positionId }, select: { title: true } }),
+      e.managerId ? this.prisma.db.employee.findFirst({ where: { id: e.managerId }, select: { name: true } }) : null,
       this.prisma.db.employmentContract.findFirst({ where: { employeeId: id, status: 'ACTIVE' }, orderBy: { version: 'desc' } }),
       this.prisma.db.trainingAssignment.findMany({ where: { employeeId: id } }),
     ]);
     // Pay is only for HR, owner and finance.
     const isHr = actorHasRole(u, 'HR') || actorHasRole(u, 'OWNER') || u.delegations.some((x) => ['HR', 'OWNER'].includes(x.roleKey));
-    return { ...this.view(e, u), isHr, canEditSensitive: this.canEditSensitive(u), ...(this.isHq(u) ? rates(e) : {}), activeContract: this.isHq(u) ? contract : contract && { ...contract, salaryBasic: undefined, allowances: undefined }, training };
+    return { ...this.view(e, u), positionTitle: position?.title ?? null, managerName: manager?.name ?? null, isHr, canEditSensitive: this.canEditSensitive(u), ...(this.isHq(u) ? rates(e) : {}), activeContract: this.isHq(u) ? contract : contract && { ...contract, salaryBasic: undefined, allowances: undefined }, training };
   }
 
   async sensitive(id: string, u: RequestUser) {
@@ -122,12 +138,50 @@ export class PeopleService {
     return next;
   }
 
-  async patch(id: string, u: RequestUser, input: { name?: string; nameAr?: string; phone?: string; email?: string; managerId?: string | null; nationality?: string; needsWorkPermit?: boolean; workPermitNumber?: string | null; workPermitExpiry?: string | null }) {
-    const { workPermitNumber, workPermitExpiry, ...data } = input;
+  // ---------------------------------------------------------------- photo (not a general document: it follows the employee's access rules)
+
+  async photo(id: string, u: RequestUser) {
+    const e = await this.assertCanSee(id, u);
+    if (!e.photoKey) throw new NotFoundException('No photo');
+    return { type: e.photoType!, data: await this.storage.get(e.photoKey) };
+  }
+
+  async setPhoto(id: string, u: RequestUser, data: Buffer | undefined) {
+    await this.photoTarget(id, u);
+    // The content decides the type: a file name or declared type proves nothing.
+    const type = data && IMAGE_TYPES.find(([, magic]) => data.subarray(0, magic.length).equals(magic))?.[0];
+    if (!data || !type) throw new BadRequestException('The photo must be a JPG or PNG image');
+    const key = `${currentTenantId()}/photos/${id}`;
+    await this.storage.put(key, data);
+    await this.prisma.db.employee.updateMany({ where: { id }, data: { photoKey: key, photoType: type } });
+    await this.audit.record({ action: 'employee.photo_changed', entityType: 'Employee', entityId: id, after: { by: u.id } });
+    return { hasPhoto: true };
+  }
+
+  async removePhoto(id: string, u: RequestUser) {
+    const e = await this.photoTarget(id, u);
+    await this.prisma.db.employee.updateMany({ where: { id }, data: { photoKey: null, photoType: null } });
+    if (e.photoKey) await this.storage.delete(e.photoKey);
+    await this.audit.record({ action: 'employee.photo_removed', entityType: 'Employee', entityId: id, after: { by: u.id } });
+    return { hasPhoto: false };
+  }
+
+  private async photoTarget(id: string, u: RequestUser) {
+    if (!this.canEditSensitive(u)) throw new ForbiddenException('Only company-wide HR or the owner can change a photo');
+    const e = await this.prisma.db.employee.findFirst({ where: { id } });
+    if (!e) throw new NotFoundException('Employee not found');
+    return e;
+  }
+
+  async patch(id: string, u: RequestUser, input: { name?: string; nameAr?: string; phone?: string; email?: string; managerId?: string | null; nationality?: string; needsWorkPermit?: boolean; workPermitNumber?: string | null; workPermitExpiry?: string | null; positionId?: string; probationMonths?: number } & Profile) {
+    const { workPermitNumber, workPermitExpiry, ...rest } = input;
+    const data = { ...rest, ...profileData(rest) };
     const before = await this.prisma.db.employee.findFirst({ where: { id } });
     if (!before) throw new NotFoundException('Employee not found');
     const permitSent = data.needsWorkPermit !== undefined || workPermitNumber !== undefined || workPermitExpiry !== undefined;
     if (permitSent && !this.isHq(u)) throw new ForbiddenException('Only company-wide roles can change a work permit');
+    if ([data.gender, data.maritalStatus, data.positionId].some((v) => v !== undefined) && !this.canEditSensitive(u)) throw new ForbiddenException('Only company-wide HR or the owner can change gender, marital status or job role');
+    if (data.positionId && !(await this.prisma.db.jobPosition.findFirst({ where: { id: data.positionId } }))) throw new NotFoundException('Position not found');
     if (data.managerId !== undefined && !this.isHq(u)) throw new ForbiddenException('Only company-wide roles can set who an employee reports to');
     if (data.managerId) {
       if (data.managerId === id) throw new BadRequestException('An employee cannot be their own manager');
@@ -142,7 +196,7 @@ export class PeopleService {
     const restart = expiry !== undefined && expiry?.getTime() !== before.workPermitExpiry?.getTime();
     await this.prisma.db.employee.updateMany({ where: { id }, data: { ...data, workPermitNumber: number, workPermitExpiry: expiry, ...(restart ? { workPermitAlertStage: null } : {}) } });
     const { name, phone, email, managerId, nationality, needsWorkPermit } = before;
-    await this.audit.record({ action: 'employee.updated', entityType: 'Employee', entityId: id, before: { name, phone, email, managerId, nationality, needsWorkPermit, workPermitNumber: before.workPermitNumber, workPermitExpiry: before.workPermitExpiry }, after: { ...data, workPermitNumber: number, workPermitExpiry: expiry } });
+    await this.audit.record({ action: 'employee.updated', entityType: 'Employee', entityId: id, before: { ...Object.fromEntries([...PROFILE, 'positionId', 'probationMonths'].map((k) => [k, (before as any)[k]])), name, phone, email, managerId, nationality, needsWorkPermit, workPermitNumber: before.workPermitNumber, workPermitExpiry: before.workPermitExpiry }, after: { ...data, workPermitNumber: number, workPermitExpiry: expiry } });
     await this.permits.alertAfterSave(id);
     return this.view(await this.prisma.db.employee.findFirstOrThrow({ where: { id } }), u);
   }

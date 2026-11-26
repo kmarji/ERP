@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Module, Param, Patch, Post, Put, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Module, Param, Patch, Post, Put, Query, Res, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { ConfigService } from '@nestjs/config';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
@@ -16,7 +17,22 @@ import { AccountsService } from './accounts.service';
 import { SscAdapter, SscService, StubSscAdapter } from './ssc.service';
 import { WorkPermitService } from './work-permit.service';
 
-class PatchDto {
+// Empty and null both mean "not set".
+const filled = (_: object, v: unknown) => v !== undefined && v !== null && v !== '';
+
+// Optional profile items, shared by create and edit.
+class ProfileDto {
+  @ValidateIf(filled) @IsIn(['MALE', 'FEMALE']) gender?: string | null;
+  @ValidateIf(filled) @IsIn(['SINGLE', 'MARRIED', 'DIVORCED', 'WIDOWED']) maritalStatus?: string | null;
+  @ValidateIf(filled) @IsIn(['FULL_TIME', 'PART_TIME', 'TEMPORARY']) workType?: string | null;
+  @IsOptional() @IsString() @MaxLength(80) department?: string | null;
+  @IsOptional() @IsString() @MaxLength(80) section?: string | null;
+  @IsOptional() @IsString() @MaxLength(80) workLocation?: string | null;
+  @ValidateIf((_, v) => v !== undefined) @IsInt() @Min(0) @Max(24) probationMonths?: number;
+}
+
+class PatchDto extends ProfileDto {
+  @ValidateIf((_, v) => v !== undefined) @IsString() positionId?: string;
   @IsOptional() @IsString() name?: string;
   @IsOptional() @IsString() nameAr?: string;
   @IsOptional() @IsString() phone?: string;
@@ -49,7 +65,7 @@ class LoginDto {
   @IsString() @MinLength(10) password!: string;
   @IsOptional() @IsString() roleKey?: string;
 }
-class NewEmployeeDto {
+class NewEmployeeDto extends ProfileDto {
   @IsString() @MinLength(2) name!: string;
   @IsOptional() @IsString() nameAr?: string;
   @IsString() @MinLength(2) @MaxLength(60) nationality!: string;
@@ -167,6 +183,21 @@ class PeopleController {
 
   @Roles(...HR) @Get('employees/:id/sensitive') sensitive(@Param('id') id: string, @CurrentUser() u: RequestUser) {
     return this.people.sensitive(id, u);
+  }
+
+  @Roles(...READ) @Get('employees/:id/photo') async photo(@Param('id') id: string, @CurrentUser() u: RequestUser, @Res() res: any) {
+    const { type, data } = await this.people.photo(id, u);
+    res.set({ 'Content-Type': type, 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': 'sandbox', 'Cache-Control': 'private, no-store' });
+    res.send(data);
+  }
+
+  @Roles(...HR) @Post('employees/:id/photo') @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024 } }))
+  setPhoto(@Param('id') id: string, @UploadedFile() file: Express.Multer.File, @CurrentUser() u: RequestUser) {
+    return this.people.setPhoto(id, u, file?.buffer);
+  }
+
+  @Roles(...HR) @Delete('employees/:id/photo') removePhoto(@Param('id') id: string, @CurrentUser() u: RequestUser) {
+    return this.people.removePhoto(id, u);
   }
 
   @Roles(...HR) @Put('employees/:id/sensitive') setSensitive(@Param('id') id: string, @Body() dto: SensitiveDto, @CurrentUser() u: RequestUser) {

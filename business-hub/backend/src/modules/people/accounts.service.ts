@@ -7,8 +7,10 @@ import { actorHasRole, RequestUser } from '../../common/tenancy/tenant-context';
 import { AuditService } from '../audit/audit.service';
 import { WorkPermitService } from './work-permit.service';
 import { dateOnly } from '../../common/time';
+import { Profile, profileData } from './profile-fields';
 
-export interface NewEmployee {
+export interface NewEmployee extends Profile {
+  probationMonths?: number;
   name: string; nameAr?: string; phone: string; email?: string;
   nationality: string; needsWorkPermit?: boolean; workPermitNumber?: string; workPermitExpiry?: string;
   legalEntityId: string; branchId: string; positionId: string; hireDate: string;
@@ -60,9 +62,9 @@ export class AccountsService {
     const hire = new Date(`${dto.hireDate.slice(0, 10)}T00:00:00.000Z`);
     const id = await this.prisma.db.$transaction(async (tx) => {
       const number = await this.sequences.next('EMP', 'EMP', tx);
-      const emp = await tx.employee.create({ data: { tenantId: '', number, legalEntityId: entity.id, name: dto.name, nameAr: dto.nameAr ?? null, nationality: dto.nationality, needsWorkPermit: !!dto.needsWorkPermit, workPermitNumber: (dto.needsWorkPermit && dto.workPermitNumber?.trim()) || null, workPermitExpiry: dto.needsWorkPermit && dto.workPermitExpiry ? dateOnly(dto.workPermitExpiry) : null, phone: dto.phone, email: (dto.email ?? dto.login?.email)?.toLowerCase() ?? null, status: hire <= new Date() ? 'ACTIVE' : 'ONBOARDING', hireDate: hire, positionId: position.id, managerId: dto.managerId ?? null } });
+      const emp = await tx.employee.create({ data: { tenantId: '', number, legalEntityId: entity.id, name: dto.name, nameAr: dto.nameAr ?? null, ...profileData(dto), probationMonths: dto.probationMonths, nationality: dto.nationality, needsWorkPermit: !!dto.needsWorkPermit, workPermitNumber: (dto.needsWorkPermit && dto.workPermitNumber?.trim()) || null, workPermitExpiry: dto.needsWorkPermit && dto.workPermitExpiry ? dateOnly(dto.workPermitExpiry) : null, phone: dto.phone, email: (dto.email ?? dto.login?.email)?.toLowerCase() ?? null, status: hire <= new Date() ? 'ACTIVE' : 'ONBOARDING', hireDate: hire, positionId: position.id, managerId: dto.managerId ?? null } });
       await tx.employeeAssignment.create({ data: { tenantId: '', employeeId: emp.id, branchId: branch.id, isPrimary: true, validFrom: hire } });
-      await tx.employmentContract.create({ data: { tenantId: '', employeeId: emp.id, version: 1, type: dto.contractType ?? 'PERMANENT', startDate: hire, salaryBasic: dto.salaryBasic, allowances: dto.allowances ?? [], weeklyHours: dto.weeklyHours ?? 48 } });
+      await tx.employmentContract.create({ data: { tenantId: '', employeeId: emp.id, version: 1, type: dto.contractType ?? 'PERMANENT', startDate: hire, salaryBasic: dto.salaryBasic, allowances: dto.allowances ?? [], weeklyHours: dto.weeklyHours ?? 48, probationMonths: dto.probationMonths } });
       if (dto.login) {
         const user = await this.newUser(tx, u, dto.name, dto.login, branch.id);
         await tx.employee.updateMany({ where: { id: emp.id }, data: { userId: user.id } });
