@@ -2,7 +2,8 @@ import { Body, Controller, Get, Module, Param, Post, Query, Req, UploadedFile, U
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
+import { compactIban, IBAN } from '../../common/iban';
 import { IsArray, IsBoolean, IsDateString, IsIn, IsInt, IsNumber, IsOptional, IsString, Matches, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
 import { RequestUser } from '../../common/tenancy/tenant-context';
 import { CurrentUser, Public, Roles } from '../auth/auth.decorators';
@@ -37,7 +38,7 @@ class PersonalDto {
   @IsString() @MinLength(5) @MaxLength(30) nationalId!: string;
   @IsDateString() dateOfBirth!: string;
   @IsString() @MinLength(5) @MaxLength(300) address!: string;
-  @IsOptional() @IsString() @Matches(/^[A-Za-z0-9 ]{10,40}$/) iban?: string;
+  @Transform(compactIban) @IsOptional() @IsString() @Matches(IBAN) iban?: string;
 }
 
 class VerifyDto {

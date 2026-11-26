@@ -1,11 +1,12 @@
 import { Body, Controller, Get, Module, Param, Patch, Post, Put, Query } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import { IsArray, IsBoolean, IsDateString, IsEmail, IsIn, IsInt, IsNumber, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength, ValidateIf, ValidateNested } from 'class-validator';
 import { FieldCryptoModule } from '../../common/crypto/field-crypto';
 import { RequestUser } from '../../common/tenancy/tenant-context';
 import { CurrentUser, Roles } from '../auth/auth.decorators';
+import { compactIban, IBAN } from '../../common/iban';
 import { requireStub } from '../integrations/adapter-mode';
 import { LearningService } from '../operations/learning.service';
 import { OperationsModule } from '../operations/operations.module';
@@ -32,7 +33,7 @@ class SensitiveDto {
   @ValidateIf((o) => o.nationalId !== undefined && o.nationalId !== '') @IsString() @MinLength(5) @MaxLength(30) nationalId?: string;
   @ValidateIf((o) => o.dateOfBirth !== undefined && o.dateOfBirth !== '') @IsDateString() dateOfBirth?: string;
   @ValidateIf((o) => o.address !== undefined) @IsString() @MaxLength(300) address?: string;
-  @ValidateIf((o) => o.iban !== undefined && o.iban !== '') @IsString() @Matches(/^[A-Za-z0-9 ]{10,40}$/) iban?: string;
+  @Transform(compactIban) @ValidateIf((o) => o.iban !== undefined && o.iban !== '') @IsString() @Matches(IBAN) iban?: string;
 }
 
 class PayrollRatesDto {

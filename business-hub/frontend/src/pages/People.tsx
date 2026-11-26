@@ -73,6 +73,7 @@ function Allowances({ rows, onChange }: { rows: Row[]; onChange: (r: Row[]) => v
 }
 
 type Permit = { needsWorkPermit: boolean; workPermitNumber: string; workPermitExpiry: string };
+const fromEmployee = (e: any): Permit => ({ needsWorkPermit: e.needsWorkPermit, workPermitNumber: e.workPermitNumber ?? '', workPermitExpiry: e.workPermitExpiry?.slice(0, 10) ?? '' });
 const toPermit = (p: Permit) => ({ needsWorkPermit: p.needsWorkPermit, workPermitNumber: p.workPermitNumber || null, workPermitExpiry: p.workPermitExpiry || null });
 function PermitFields({ value, onChange }: { value: Permit; onChange: (p: Permit) => void }) {
   return (
@@ -88,17 +89,17 @@ function PermitFields({ value, onChange }: { value: Permit; onChange: (p: Permit
 
 function PermitBadge({ permit }: { permit?: { state: 'INCOMPLETE' | 'EXPIRED' | 'EXPIRING'; daysLeft: number | null } | null }) {
   if (!permit) return null;
-  const text = permit.state === 'INCOMPLETE' ? 'Work permit incomplete' : permit.state === 'EXPIRED' ? 'Permit expired' : `Permit expires in ${permit.daysLeft} days`;
+  const text = permit.state === 'INCOMPLETE' ? 'Work permit incomplete' : permit.state === 'EXPIRED' ? 'Permit expired' : permit.daysLeft === 0 ? 'Permit expires today' : `Permit expires in ${permit.daysLeft} day${permit.daysLeft === 1 ? '' : 's'}`;
   return <span className={`ms-2 inline-block rounded px-2 py-0.5 text-xs font-semibold ${permit.state === 'EXPIRING' ? 'bg-amber-100 text-amber-800' : 'bg-red-100 text-red-700'}`}>{text}</span>;
 }
 
 function PermitCard({ e }: { e: any }) {
   const qc = useQueryClient();
   const [nationality, setNationality] = useState(e.nationality ?? '');
-  const [p, setP] = useState<Permit>({ needsWorkPermit: e.needsWorkPermit, workPermitNumber: e.workPermitNumber ?? '', workPermitExpiry: e.workPermitExpiry?.slice(0, 10) ?? '' });
+  const [p, setP] = useState<Permit>(fromEmployee(e));
   // Branch-scoped HR does not receive the number, so the permit is only editable when it was sent.
   const full = 'workPermitNumber' in e;
-  const save = useMutation({ mutationFn: () => api(`/employees/${e.id}`, { method: 'PATCH', body: { nationality: nationality || undefined, ...(full ? toPermit(p) : {}) } }), onSuccess: () => qc.invalidateQueries() });
+  const save = useMutation({ mutationFn: () => api<any>(`/employees/${e.id}`, { method: 'PATCH', body: { nationality: nationality || undefined, ...(full ? toPermit(p) : {}) } }), onSuccess: (r: any) => { setP(fromEmployee(r)); qc.invalidateQueries(); } });
   return (
     <Card title="Nationality and work permit">
       <ErrorBox error={save.error} />
@@ -112,7 +113,7 @@ function PermitCard({ e }: { e: any }) {
 }
 
 const SENSITIVE = [['nationalId', 'National id', 'text'], ['dateOfBirth', 'Date of birth', 'date'], ['address', 'Address', 'text'], ['iban', 'IBAN (salary account)', 'text']] as const;
-function SensitiveCard({ id }: { id: string }) {
+function SensitiveCard({ id, canEdit }: { id: string; canEdit: boolean }) {
   const [f, setF] = useState<Record<string, string> | null>(null);
   const load = useMutation({ mutationFn: () => api<Record<string, string>>(`/employees/${id}/sensitive`), onSuccess: (r) => { save.reset(); setF(r); } });
   // All four are sent: an emptied box removes that value.
@@ -122,9 +123,9 @@ function SensitiveCard({ id }: { id: string }) {
       <ErrorBox error={load.error ?? save.error} />
       <p className="mb-2 text-amber-800">National id, date of birth, address and bank details are encrypted. Viewing and changing them is recorded in the audit trail with your name.</p>
       {!f ? <Button variant="ghost" onClick={() => load.mutate()}>View sensitive details</Button> : (
-        <form className="grid gap-2 sm:grid-cols-2" onSubmit={(ev: FormEvent) => { ev.preventDefault(); save.mutate(); }}>
-          {SENSITIVE.map(([k, label, type]) => <Field key={k} label={label}><Input type={type} value={(type === 'date' ? f[k]?.slice(0, 10) : f[k]) ?? ''} onChange={(ev) => { save.reset(); setF({ ...f, [k]: ev.target.value }); }} /></Field>)}
-          <div className="flex items-center gap-2 sm:col-span-2"><Button disabled={save.isPending}>Save changes</Button><Button type="button" variant="ghost" onClick={() => setF(null)}>Hide</Button>{save.isSuccess && <span className="text-xs text-emerald-700">Saved.</span>}</div>
+        <form className="grid gap-2 sm:grid-cols-2" onSubmit={(ev: FormEvent) => { ev.preventDefault(); if (canEdit) save.mutate(); }}>
+          {SENSITIVE.map(([k, label, type]) => <Field key={k} label={label}><Input type={type} readOnly={!canEdit} value={(type === 'date' ? f[k]?.slice(0, 10) : f[k]) ?? ''} onChange={(ev) => { save.reset(); setF({ ...f, [k]: ev.target.value }); }} /></Field>)}
+          <div className="flex items-center gap-2 sm:col-span-2">{canEdit && <Button disabled={save.isPending}>Save changes</Button>}<Button type="button" variant="ghost" onClick={() => setF(null)}>Hide</Button>{save.isSuccess && <span className="text-xs text-emerald-700">Saved.</span>}</div>
         </form>
       )}
     </div>
@@ -325,7 +326,7 @@ function EmployeeDetail({ id }: { id: string }) {
       <ErrorBox error={addAsg.error ?? endAsg.error ?? newCon.error ?? doneTr.error ?? addTr.error} />
       <Card title={<>{e.name} · {e.number}<PermitBadge permit={e.permit} /></>}>
         <p className="text-sm"><StatusBadge status={e.status} /> hired {formatDate(e.hireDate)} · {e.phone} {e.email}</p>
-        {"sscRateNote" in e && <SensitiveCard id={id} />}
+        {e.isHr && "sscRateNote" in e && <SensitiveCard id={id} canEdit={e.canEditSensitive} />}
       </Card>
       <Card title="Assignments (branches)">
         <Table head={['Branch', 'Primary', 'From', 'To', '']}>
@@ -346,7 +347,7 @@ function EmployeeDetail({ id }: { id: string }) {
           <Button type="submit">Add</Button>
         </form>
       </Card>
-      {"sscRateNote" in e && <PermitCard e={e} />}
+      {e.isHr && "sscRateNote" in e && <PermitCard e={e} />}
       <ManagerCard e={e} />
       {"sscRateNote" in e && <AccessCard e={e} />}
       {"sscRateNote" in e && <RatesCard e={e} />}

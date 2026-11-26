@@ -1,4 +1,5 @@
 import { INestApplication } from '@nestjs/common';
+import { FieldCrypto } from '../src/common/crypto/field-crypto';
 import { PrismaService } from '../src/common/prisma/prisma.service';
 import { runWithTenant } from '../src/common/tenancy/tenant-context';
 import { ammanToday } from '../src/common/time';
@@ -109,5 +110,31 @@ describe('M13 employee file: sensitive details, allowances, nationality, work pe
     const a = await prisma.raw.auditEvent.findFirstOrThrow({ where: { tenantId: T.tenantId, action: 'employee.contract_changed', entityId: e.id } });
     expect(a.before).toMatchObject({ allowances: [{ name: 'Housing', amount: 50 }] });
     expect(a.after).toMatchObject({ allowances: [{ name: 'Laundry', amount: 10 }] });
+  });
+
+  it('tells the screen who may view and who may change the file', async () => {
+    const e = await create({ name: 'Flag Check' });
+    const flags = async (token: string) => { const b = (await get(`/employees/${e.id}`, token).expect(200)).body; return [b.isHr, b.canEditSensitive]; };
+    const finance = await makeUser(http, T, 'fin', 'FINANCE');
+    expect(await flags(hr.token)).toEqual([true, true]);
+    expect(await flags(finance.token)).toEqual([false, false]);
+  });
+
+  it('checks the IBAN length without its spaces', async () => {
+    const e = await create({ name: 'Short Iban' });
+    await put(`/employees/${e.id}/sensitive`, hr.token, { iban: 'JO 1 2 3 4 5' }).expect(400);
+  });
+
+  it('audits only real changes', async () => {
+    const e = await create({ name: 'Audit Check', needsWorkPermit: true, workPermitNumber: 'WP-1' });
+    const url = `/employees/${e.id}`;
+    // A candidate-entered IBAN is stored with spaces: re-saving it must not count as a change.
+    await prisma.raw.employee.update({ where: { id: e.id }, data: { sensitive: app.get(FieldCrypto).encrypt({ iban: 'jo94 cbjo 0010 0000 0000 0131 0003 02' }) } });
+    await put(`${url}/sensitive`, hr.token, { iban: 'JO94CBJO0010000000000131000302', address: 'Amman' }).expect(200);
+    const changed = await prisma.raw.auditEvent.findFirstOrThrow({ where: { tenantId: T.tenantId, action: 'employee.sensitive_changed', entityId: e.id } });
+    expect((changed.after as any).fields).toEqual(['address']);
+    await patch(url, hr.token, { needsWorkPermit: false, workPermitNumber: 'ignored' }).expect(200);
+    const updated = await prisma.raw.auditEvent.findFirstOrThrow({ where: { tenantId: T.tenantId, action: 'employee.updated', entityId: e.id } });
+    expect(updated.after).toMatchObject({ needsWorkPermit: false, workPermitNumber: null, workPermitExpiry: null });
   });
 });

@@ -32,6 +32,11 @@ export class PeopleService {
     return { ...rest, ...(this.isHq(u) ? { workPermitNumber } : {}), permit: permitStatus(e, ammanToday()) };
   }
 
+  // Changing sensitive details needs a direct company-wide HR or owner role (a delegation is not enough).
+  private canEditSensitive(u: RequestUser) {
+    return u.roles.some((r) => ['HR', 'OWNER'].includes(r.key) && r.branchId === null);
+  }
+
   // HQ-wide HR/finance/owner see everyone; a branch manager only people assigned to a branch they manage.
   private isHq(u: RequestUser) {
     return u.roles.some((r) => HQ_ROLES.includes(r.key) && r.branchId === null) || u.delegations.some((x) => HQ_ROLES.includes(x.roleKey) && x.branchId === null);
@@ -78,7 +83,8 @@ export class PeopleService {
       this.prisma.db.trainingAssignment.findMany({ where: { employeeId: id } }),
     ]);
     // Pay is only for HR, owner and finance.
-    return { ...this.view(e, u), ...(this.isHq(u) ? rates(e) : {}), activeContract: this.isHq(u) ? contract : contract && { ...contract, salaryBasic: undefined, allowances: undefined }, training };
+    const isHr = actorHasRole(u, 'HR') || actorHasRole(u, 'OWNER') || u.delegations.some((x) => ['HR', 'OWNER'].includes(x.roleKey));
+    return { ...this.view(e, u), isHr, canEditSensitive: this.canEditSensitive(u), ...(this.isHq(u) ? rates(e) : {}), activeContract: this.isHq(u) ? contract : contract && { ...contract, salaryBasic: undefined, allowances: undefined }, training };
   }
 
   async sensitive(id: string, u: RequestUser) {
@@ -90,7 +96,7 @@ export class PeopleService {
 
   // Company-wide HR or owner only: changing the IBAN changes where salary is paid. Values never reach the audit trail.
   async setSensitive(id: string, u: RequestUser, input: { nationalId?: string; dateOfBirth?: string; address?: string; iban?: string }) {
-    if (!u.roles.some((r) => ['HR', 'OWNER'].includes(r.key) && r.branchId === null)) throw new ForbiddenException('Only company-wide HR or the owner can change sensitive details');
+    if (!this.canEditSensitive(u)) throw new ForbiddenException('Only company-wide HR or the owner can change sensitive details');
     const e = await this.prisma.db.employee.findFirst({ where: { id } });
     if (!e) throw new NotFoundException('Employee not found');
     // A blob that cannot be decrypted throws here, so it is never overwritten.
@@ -99,8 +105,10 @@ export class PeopleService {
     for (const key of ['nationalId', 'dateOfBirth', 'address', 'iban'] as const) {
       let value = input[key]?.trim();
       if (value === undefined) continue;
-      if (key === 'iban') value = value.replace(/ /g, '').toUpperCase();
-      if (value === (next[key] ?? '')) continue;
+      // Compared in normalised form, so a formatting-only difference is not recorded as a change.
+      const normal = (v: string) => (key === 'iban' ? v.replace(/\s/g, '').toUpperCase() : v.trim());
+      value = normal(value);
+      if (value === normal(next[key] ?? '')) continue;
       fields.push(key);
       if (value) next[key] = value;
       else delete next[key];
@@ -134,7 +142,7 @@ export class PeopleService {
     const restart = expiry !== undefined && expiry?.getTime() !== before.workPermitExpiry?.getTime();
     await this.prisma.db.employee.updateMany({ where: { id }, data: { ...data, workPermitNumber: number, workPermitExpiry: expiry, ...(restart ? { workPermitAlertStage: null } : {}) } });
     const { name, phone, email, managerId, nationality, needsWorkPermit } = before;
-    await this.audit.record({ action: 'employee.updated', entityType: 'Employee', entityId: id, before: { name, phone, email, managerId, nationality, needsWorkPermit, workPermitNumber: before.workPermitNumber, workPermitExpiry: before.workPermitExpiry }, after: input });
+    await this.audit.record({ action: 'employee.updated', entityType: 'Employee', entityId: id, before: { name, phone, email, managerId, nationality, needsWorkPermit, workPermitNumber: before.workPermitNumber, workPermitExpiry: before.workPermitExpiry }, after: { ...data, workPermitNumber: number, workPermitExpiry: expiry } });
     await this.permits.alertAfterSave(id);
     return this.view(await this.prisma.db.employee.findFirstOrThrow({ where: { id } }), u);
   }
