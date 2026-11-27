@@ -6,20 +6,9 @@ import { addDays, formatDate, formatJOD, formatTime, ymd } from './format';
 import Letter from './Letter';
 import { Learning, Notifications, Safety, Tasks } from './Ops';
 import { flush, queue } from './offline';
+import { locate, position } from './location';
 
 const TENANT_KEY = 'bh_tenant';
-
-// Best GPS fix within `ms`: watch until the reading is good (30 m) or time runs out, then use the most accurate one seen.
-// A single getCurrentPosition often returns a coarse or cached fix, which is why a second try used to "work".
-function position(ms = 12_000) {
-  return new Promise<{ lat: number; lng: number; accuracy: number }>((ok, no) => {
-    if (!navigator.geolocation) return no(new Error('no geolocation'));
-    let best: GeolocationPosition | null = null;
-    const done = () => { navigator.geolocation.clearWatch(id); clearTimeout(timer); best ? ok({ lat: best.coords.latitude, lng: best.coords.longitude, accuracy: best.coords.accuracy }) : no(new Error('no fix')); };
-    const id = navigator.geolocation.watchPosition((p) => { if (!best || p.coords.accuracy < best.coords.accuracy) best = p; if (p.coords.accuracy <= 30) done(); }, (e) => { if (!best) { navigator.geolocation.clearWatch(id); clearTimeout(timer); no(e); } }, { enableHighAccuracy: true, maximumAge: 0, timeout: ms });
-    const timer = setTimeout(done, ms);
-  });
-}
 
 export default function App() {
   const [signedIn, setSignedIn] = useState(!!auth.get());
@@ -117,13 +106,9 @@ function Home() {
   const from = ymd(new Date());
   const shifts = useQuery({ queryKey: ['schedule', from], queryFn: () => api<any[]>(`/me/schedule?from=${from}&to=${addDays(from, 14)}`) });
   const open = entries.data?.find((e) => e.status === 'OPEN');
-  const [geoDenied, setGeoDenied] = useState(false);
   const [left, setLeft] = useState('');
-  const [geoWhy, setGeoWhy] = useState('');
-  // Phones often fail the high-accuracy GPS watch (indoors, cold start); fall back to a coarse network/Wi-Fi fix before giving up.
-  const coarse = () => new Promise<{ lat: number; lng: number; accuracy: number }>((ok, no) => navigator.geolocation.getCurrentPosition((p) => ok({ lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy }), no, { enableHighAccuracy: false, maximumAge: 60_000, timeout: 15_000 }));
-  const why = (e: any) => !window.isSecureContext ? 'This page is not on https.' : e?.code === 1 ? 'Location permission is blocked for this site (check the browser and phone settings).' : e?.code === 2 ? 'Your phone could not determine its position; turn on Location/GPS.' : 'Locating timed out; move near a window and try again.';
-  const where = async () => { try { const p = await position().catch(() => coarse()); setGeoDenied(false); return p; } catch (e) { setGeoWhy(why(e)); setGeoDenied(true); return {}; } };
+  const [problem, setProblem] = useState('');
+  const where = async () => { const r = await locate(); setProblem(r.problem ?? ''); return r.fix ?? {}; };
   const go = useMutation({ mutationFn: async (p: string) => api(`/me/${p}`, { method: 'POST', body: p === 'clock-in' ? await where() : {} }), onSuccess: () => { setLeft(''); qc.invalidateQueries({ queryKey: ['time'] }); } });
   // While clocked in, check the phone's position every minute; leaving the branch area clocks the employee out.
   useEffect(() => {
@@ -142,7 +127,7 @@ function Home() {
       <Card title="Clock in / out · تسجيل الحضور">
         <ErrorBox error={go.error} />
         {left && <p className="mb-2 rounded bg-amber-50 p-2 text-sm text-amber-800">{left}</p>}
-        {geoDenied && go.error && <p className="mb-2 text-sm text-amber-700">{geoWhy}</p>}
+        {problem && go.error && <p className="mb-2 text-sm text-amber-700">{problem}</p>}
         <div className="flex items-center gap-3">
           {open
             ? <><span className="text-sm">Clocked in since {formatDate(open.clockIn)}</span><Button variant="danger" disabled={go.isPending} onClick={() => go.mutate('clock-out')}>Clock out · خروج</Button></>

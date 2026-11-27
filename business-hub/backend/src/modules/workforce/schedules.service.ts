@@ -1,3 +1,4 @@
+import { ownDutyRule } from '../audit/owner-override';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { assertBranchAccess } from '../../common/tenancy/branch-scope';
@@ -218,7 +219,7 @@ export class SchedulesService {
     const s = await this.prisma.db.shiftSchedule.findFirstOrThrow({ where: { id: sw.scheduleId } });
     assertBranchAccess(user, s.branchId, MANAGERS);
     const mine = await this.prisma.db.employee.findFirst({ where: { userId: user.id } });
-    if (mine && (mine.id === sw.fromEmployeeId || mine.id === sw.toEmployeeId)) throw new ForbiddenException('You cannot decide your own swap');
+    await ownDutyRule(!!mine && (mine.id === sw.fromEmployeeId || mine.id === sw.toEmployeeId), user, this.audit, 'ShiftSwapRequest', id, 'You cannot decide your own swap');
     if (approve) {
       if (s.employeeId !== sw.fromEmployeeId || s.status !== 'PUBLISHED') throw new ConflictException('The shift changed since the request');
       await this.validate(sw.toEmployeeId, s.branchId, s.date, s.startAt, s.endAt, s.id);

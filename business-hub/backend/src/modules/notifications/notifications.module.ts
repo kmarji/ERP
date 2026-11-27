@@ -1,7 +1,7 @@
 import { Controller, Get, Global, Injectable, Logger, Module, Param, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { currentTenantId, RequestUser } from '../../common/tenancy/tenant-context';
+import { currentTenantId, RequestUser, isOwner } from '../../common/tenancy/tenant-context';
 import { CurrentUser } from '../auth/auth.decorators';
 
 // Delivery channel adapter. Stub logs; email/SMS providers plug in here once chosen.
@@ -32,19 +32,22 @@ export class NotificationsService {
     return row;
   }
 
-  mine(user: RequestUser, unreadOnly = false) {
+  // What the caller may read: their own plus their roles'. The owner reads every role's.
+  private addressedTo(user: RequestUser) {
     const roleKeys = [...user.roles.map((r) => r.key), ...user.delegations.map((d) => d.roleKey)];
-    return this.prisma.db.notification.findMany({
-      where: { OR: [{ userId: user.id }, { roleKey: { in: roleKeys } }], ...(unreadOnly ? { readAt: null } : {}) },
-      orderBy: { createdAt: 'desc' },
-      take: 100,
-    });
+    return [{ userId: user.id }, { roleKey: isOwner(user) ? { not: null } : { in: roleKeys } }];
   }
 
-  // Only a notification addressed to the caller (by user or by one of their roles) can be marked read.
+  async mine(user: RequestUser, unreadOnly = false) {
+    const rows = await this.prisma.db.notification.findMany({ where: { OR: this.addressedTo(user), ...(unreadOnly ? { readAt: null } : {}) }, orderBy: { createdAt: 'desc' }, take: 100 });
+    if (!isOwner(user)) return rows;
+    // One message sent to several roles shows once.
+    return rows.filter((r, i) => rows.findIndex((x) => x.title === r.title && x.body === r.body && Math.abs(+x.createdAt - +r.createdAt) < 60_000) === i);
+  }
+
+  // Only a notification the caller may read can be marked read.
   markRead(id: string, user: RequestUser) {
-    const roleKeys = [...user.roles.map((r) => r.key), ...user.delegations.map((d) => d.roleKey)];
-    return this.prisma.db.notification.updateMany({ where: { id, OR: [{ userId: user.id }, { roleKey: { in: roleKeys } }] }, data: { readAt: new Date() } });
+    return this.prisma.db.notification.updateMany({ where: { id, OR: this.addressedTo(user) }, data: { readAt: new Date() } });
   }
 }
 

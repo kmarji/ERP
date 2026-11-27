@@ -1,3 +1,4 @@
+import { ownDutyRule } from '../audit/owner-override';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { Prisma } from '@prisma/client';
@@ -283,7 +284,7 @@ export class PayrollService implements OnModuleInit {
     const run = await this.prisma.db.payrollRun.findFirst({ where: { id: runId } });
     if (!run) throw new NotFoundException('Payroll run not found');
     if (run.status !== 'IN_REVIEW') throw new ConflictException(`Run is ${run.status}`);
-    if (run.createdBy === user.id) throw new ForbiddenException('The person who prepared the payroll cannot review it');
+    await ownDutyRule(run.createdBy === user.id, user, this.audit, 'PayrollRun', runId, 'The person who prepared the payroll cannot review it');
     if (!input.approve) {
       await this.prisma.db.payrollRun.updateMany({ where: { id: runId }, data: { status: 'CALCULATED' } });
       await this.fire(runId, 'review_rejected');
@@ -313,7 +314,9 @@ export class PayrollService implements OnModuleInit {
         await this.fire(run.id, 'declined');
         return;
       }
-      if (e.decidedBy === run.createdBy) {
+      const ownerDecided = e.decidedBy === run.createdBy && !!(await this.prisma.db.userRole.findFirst({ where: { userId: e.decidedBy, branchId: null, role: { key: 'OWNER' } } }));
+      if (ownerDecided) await this.audit.record({ action: 'owner.override', entityType: 'PayrollRun', entityId: run.id, after: { rule: 'The person who prepared the payroll cannot authorize it', by: e.decidedBy } });
+      if (e.decidedBy === run.createdBy && !ownerDecided) {
         await this.prisma.db.payrollRun.updateMany({ where: { id: run.id }, data: { status: 'CALCULATED' } });
         await this.fire(run.id, 'declined');
         await this.exceptions.raise({ code: 'PAYROLL_SEPARATION_OF_DUTIES', reason: `Payroll ${run.number} was authorized by the person who prepared it; the authorization was not used`, evidence: { runId: run.id }, ownerRole: 'FINANCE', riskTier: 'HIGH', availableActions: ['resolve'] });

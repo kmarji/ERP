@@ -1,3 +1,4 @@
+import { ownDutyRule } from '../audit/owner-override';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { d, money } from '../../common/money';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -92,7 +93,7 @@ export class DisciplineService {
     const emp = await this.prisma.db.employee.findFirst({ where: { id: input.employeeId } });
     if (!emp) throw new BadRequestException('Unknown employee');
     if (!(await this.categories()).some((c) => c.key === input.category)) throw new BadRequestException('Unknown or inactive category');
-    if (emp.userId === user.id) throw new ForbiddenException('You cannot report yourself');
+    await ownDutyRule(emp.userId === user.id, user, this.audit, 'Employee', emp.id, 'You cannot report yourself');
     // A branch-scoped manager may only report staff currently assigned to their branch.
     const now = new Date();
     const branches = (await this.prisma.db.employeeAssignment.findMany({ where: { employeeId: emp.id, validFrom: { lte: now }, OR: [{ validTo: null }, { validTo: { gte: now } }] } })).map((a) => a.branchId);
@@ -106,7 +107,7 @@ export class DisciplineService {
 
   // Nobody handles a case about themselves, whatever their role.
   private async notSelf(employeeId: string, user: RequestUser) {
-    if ((await this.prisma.db.employee.findFirst({ where: { id: employeeId } }))?.userId === user.id) throw new ForbiddenException('You cannot handle a case about yourself');
+    await ownDutyRule((await this.prisma.db.employee.findFirst({ where: { id: employeeId } }))?.userId === user.id, user, this.audit, 'Employee', employeeId, 'You cannot handle a case about yourself');
   }
 
   private async move(id: string, from: string[], to: string, data: Record<string, unknown> = {}, action = `discipline.${to.toLowerCase()}`) {

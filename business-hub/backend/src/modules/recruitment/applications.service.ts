@@ -1,3 +1,4 @@
+import { ownDutyRule } from '../audit/owner-override';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -278,7 +279,7 @@ export class ApplicationsService {
     if (!appeal) throw new NotFoundException('Appeal not found');
     if (appeal.status !== 'OPEN') throw new ConflictException(`Appeal is ${appeal.status}`);
     // A different person reviews: the original decider cannot mark their own homework.
-    if (appeal.originalDecidedBy && appeal.originalDecidedBy === user.id) throw new ForbiddenException('The person who made the original decision cannot resolve the appeal');
+    await ownDutyRule(appeal.originalDecidedBy === user.id, user, this.audit, 'Appeal', id, 'The person who made the original decision cannot resolve the appeal');
     const app = await this.flow.load(appeal.applicationId);
     await this.prisma.db.appeal.updateMany({ where: { id }, data: { status: input.outcome, resolvedBy: user.id, resolvedAt: new Date(), resolution: input.resolution } });
     if (input.outcome === 'OVERTURNED') {

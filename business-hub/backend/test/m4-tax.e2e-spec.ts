@@ -55,7 +55,7 @@ describe('M4 Transaction-to-Tax-Filing (WF-07, AT-10)', () => {
       await h.post(`/tax/returns/${v1.id}/submit-review`, w.fin.token).expect(409);
       await h.post(`/tax/returns/${v1.id}/acknowledge`, w.fin.token, { code: 'UNPOSTED_DOCUMENTS', reason: 'x' }).expect(400); // reason too short
       await h.post(`/tax/returns/${v1.id}/acknowledge`, w.fin.token, { code: 'NOPE', reason: 'not a real finding' }).expect(404);
-      await h.post(`/tax/returns/${v1.id}/acknowledge`, w.T.token, { code: 'UNPOSTED_DOCUMENTS', reason: 'owner is not a finance reviewer' }).expect(403);
+      await h.post(`/tax/returns/${v1.id}/acknowledge`, w.manager.token, { code: 'UNPOSTED_DOCUMENTS', reason: 'a manager is not a finance reviewer' }).expect(403);
       await h.post(`/tax/returns/${v1.id}/acknowledge`, w.fin.token, { code: 'UNPOSTED_DOCUMENTS', reason: 'repost scheduled after period reopening' }).expect(201);
       const inReview = (await h.post(`/tax/returns/${v1.id}/submit-review`, w.fin.token).expect(201)).body;
       expect(inReview.status).toBe('IN_REVIEW');
@@ -132,7 +132,7 @@ describe('M4 Transaction-to-Tax-Filing (WF-07, AT-10)', () => {
       await h.post(`/tax/returns/${ret.id}/review`, w.fin.token, { approve: true }).expect(409); // not yet in review
       await h.post(`/tax/returns/${ret.id}/submit-review`, w.fin.token).expect(201);
       await h.post(`/tax/returns/${ret.id}/review`, w.fin.token, { approve: true }).expect(403); // preparer cannot review own work
-      await h.post(`/tax/returns/${ret.id}/review`, w.T.token, { approve: true }).expect(403); // owner is not a finance reviewer
+      await h.post(`/tax/returns/${ret.id}/review`, w.manager.token, { approve: true }).expect(403); // a manager is not a finance reviewer
       const reviewed = (await h.post(`/tax/returns/${ret.id}/review`, fin2.token, { approve: true, comment: 'agrees to ledger' }).expect(201)).body;
       expect(reviewed).toMatchObject({ status: 'AWAITING_AUTHORIZATION', reviewedBy: fin2.id });
 

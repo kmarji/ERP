@@ -23,7 +23,7 @@ export async function api<T = any>(path: string, init: { method?: string; body?:
     headers,
     body: init.body ? JSON.stringify(init.body) : undefined,
   });
-  if (res.status === 401 && token) {
+  if (res.status === 401 && token && path !== '/auth/login') { // a wrong password must show its error, not reload
     auth.clear();
     window.location.assign('/login');
   }

@@ -1,3 +1,4 @@
+import { ownDutyRule } from '../audit/owner-override';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import * as bcrypt from 'bcrypt';
@@ -187,7 +188,7 @@ export class OnboardingService {
     const o = await this.offer(id);
     if (o.status !== 'ACCEPTED' || !o.candidateSignedAt) throw new ConflictException('The candidate must sign first');
     if (o.countersignedAt) return o;
-    if (o.createdBy === user.id) throw new ForbiddenException('The person who drafted the offer cannot countersign it');
+    await ownDutyRule(o.createdBy === user.id, user, this.audit, 'Offer', id, 'The person who drafted the offer cannot countersign it');
     await this.prisma.db.offer.updateMany({ where: { id, countersignedAt: null }, data: { countersignedBy: user.id, countersignedAt: new Date() } });
     await this.audit.record({ action: 'offer.countersigned', entityType: 'Offer', entityId: id, after: { by: user.id } });
     return this.offer(id);

@@ -1,3 +1,4 @@
+import { ownDutyRule } from '../audit/owner-override';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService, ScopedClient } from '../../common/prisma/prisma.service';
@@ -90,7 +91,7 @@ export class ActionsService {
     const a = await this.load(id, user);
     if (a.status !== 'PENDING_VERIFICATION') throw new ConflictException(`Action is ${a.status}`);
     const assignee = a.assigneeEmployeeId ? await this.prisma.db.employee.findFirst({ where: { id: a.assigneeEmployeeId } }) : null;
-    if (assignee?.userId === user.id) throw new ForbiddenException('The person who did the work cannot verify it');
+    await ownDutyRule(assignee?.userId === user.id, user, this.audit, 'CorrectiveAction', id, 'The person who did the work cannot verify it');
     if (!input.approve) return this.move(a, ['PENDING_VERIFICATION'], { status: 'IN_PROGRESS', completedAt: null }, note(user.id, 'rejected', input.note), 'corrective_action.rejected');
     if (a.severity === 'CRITICAL' && !isCompanyWide(user)) throw new ForbiddenException('Closing a CRITICAL action needs a company-wide role');
     if (a.source === 'FOOD_SAFETY' && a.sourceId && !(await this.prisma.db.foodSafetyReading.findFirst({ where: { pointId: a.sourceId, inRange: true, takenAt: { gt: a.createdAt } } }))) {
@@ -104,7 +105,7 @@ export class ActionsService {
     if (['CLOSED', 'CANCELLED'].includes(a.status)) throw new ConflictException(`Action is ${a.status}`);
     // Cancelling is a way to make a finding disappear, so it follows the closing rules and is stricter for findings.
     const assignee = a.assigneeEmployeeId ? await this.prisma.db.employee.findFirst({ where: { id: a.assigneeEmployeeId } }) : null;
-    if (assignee?.userId === user.id) throw new ForbiddenException('The assignee cannot cancel their own action');
+    await ownDutyRule(assignee?.userId === user.id, user, this.audit, 'CorrectiveAction', id, 'The assignee cannot cancel their own action');
     if ((a.severity === 'CRITICAL' || a.source !== 'MANUAL') && !isCompanyWide(user)) throw new ForbiddenException('Cancelling a critical action, or one raised by an audit or food-safety breach, needs a company-wide role');
     return this.move(a, [a.status], { status: 'CANCELLED' }, note(user.id, 'cancelled', reason), 'corrective_action.cancelled');
   }

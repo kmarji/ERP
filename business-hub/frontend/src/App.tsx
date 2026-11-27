@@ -16,7 +16,7 @@ import Receiving from './pages/Receiving';
 import StockOperations from './pages/StockOperations';
 import Suppliers from './pages/Suppliers';
 import Login from './pages/Login';
-import OwnerHome from './pages/OwnerHome';
+import Home from './pages/Home';
 import Customers from './pages/Customers';
 import MenuAdmin from './pages/MenuAdmin';
 import PosDevices from './pages/PosDevices';
@@ -52,7 +52,7 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<Login />} />
       <Route element={<Protected />}>
-        <Route path="/" element={<OwnerHome />} />
+        <Route path="/" element={<Home />} />
         <Route path="/exceptions" element={<Exceptions />} />
         <Route path="/approvals" element={<Approvals />} />
         <Route path="/purchasing" element={<Purchasing />} />

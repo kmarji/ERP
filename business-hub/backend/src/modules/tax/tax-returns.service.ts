@@ -1,3 +1,4 @@
+import { ownDutyRule } from '../audit/owner-override';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { Cron } from '@nestjs/schedule';
@@ -299,7 +300,7 @@ export class TaxReturnsService implements OnModuleInit {
   async review(id: string, input: { approve: boolean; comment?: string }, user: RequestUser) {
     const r = await this.get(id);
     if (r.status !== 'IN_REVIEW') throw new ConflictException(`Return is ${r.status}`);
-    if (r.generatedBy === user.id) throw new ForbiddenException('The preparer cannot review their own return');
+    await ownDutyRule(r.generatedBy === user.id, user, this.audit, 'TaxReturn', id, 'The preparer cannot review their own return');
     if (!actorHasRole(user, 'FINANCE')) throw new ForbiddenException('Only a finance reviewer can review a tax return');
     if (!input.approve) {
       await this.prisma.db.taxReturn.updateMany({ where: { id, status: 'IN_REVIEW' }, data: { status: 'DRAFT' } });

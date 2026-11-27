@@ -1,3 +1,4 @@
+import { ownDutyRule } from '../audit/owner-override';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -71,7 +72,7 @@ export class ApprovalService {
     if (!a) throw new NotFoundException('Approval not found');
     if (a.status !== 'PENDING') throw new BadRequestException(`Approval already ${a.status}`);
     // Separation of duties: the requester can never decide their own request.
-    if (a.requestedBy === actor.id) throw new ForbiddenException('Requester cannot approve their own request');
+    await ownDutyRule(a.requestedBy === actor.id, actor, this.audit, 'Approval', id, 'Requester cannot approve their own request');
 
     // The delegate shortcut exists only for line managers deciding leave; it never opens other approvals.
     if (opts.delegate && a.subjectType !== 'LeaveRequest') throw new ForbiddenException('Delegated approval is only for leave requests');

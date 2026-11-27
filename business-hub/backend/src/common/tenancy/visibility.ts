@@ -1,8 +1,9 @@
-import { RequestUser } from './tenant-context';
+import { isOwner, RequestUser } from './tenant-context';
 
 // Prisma OR-clauses restricting rows to roles the actor holds (directly or by delegation),
 // honouring branch scope: an HQ-wide role sees every branch, a branch-limited role only its own.
-export function roleVisibility(user: RequestUser, roleField: string, branchField: string | null = 'branchId') {
+export function roleVisibility(user: RequestUser, roleField: string, branchField: string | null = 'branchId'): Record<string, unknown>[] {
+  if (isOwner(user)) return [{ id: { not: '' } }]; // the owner sees every row
   const entries: { key: string; branchId: string | null }[] = [
     ...user.roles.map((r) => ({ key: r.key, branchId: r.branchId })),
     ...user.delegations.map((d) => ({ key: d.roleKey, branchId: d.branchId })),

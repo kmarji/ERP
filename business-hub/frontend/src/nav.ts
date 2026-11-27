@@ -11,7 +11,7 @@ const MGR = ['OWNER', 'HR', 'BRANCH_MANAGER'];
 const HR_FIN = ['OWNER', 'HR', 'FINANCE'];
 
 export const NAV: NavItem[] = [
-  { to: '/', label: 'Owner home', group: 'Overview' },
+  { to: '/', label: 'Owner home', group: 'Overview', roles: ['OWNER'] },
   { to: '/exceptions', label: 'Exceptions', group: 'Overview' },
   { to: '/approvals', label: 'Approvals', group: 'Overview' },
   { to: '/purchasing', label: 'Purchasing', group: 'Purchasing' },

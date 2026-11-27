@@ -1,3 +1,4 @@
+import { ownDutyRule } from '../audit/owner-override';
 import { Attachment, attachmentSnapshot } from './attachments';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
@@ -62,7 +63,7 @@ export class LearningService {
   // The bank includes the answer key, so someone still sitting this exam cannot read it.
   async questions(itemCode: string, user: RequestUser, status?: string) {
     const me = await this.prisma.db.employee.findFirst({ where: { userId: user.id } });
-    if (me && (await this.prisma.db.trainingAssignment.findFirst({ where: { employeeId: me.id, itemCode, status: { in: ['ASSIGNED', 'IN_PROGRESS', 'EXAM_PENDING', 'FAILED'] } } }))) throw new ForbiddenException('You are taking this exam, so you cannot read its questions');
+    await ownDutyRule(!!(me && (await this.prisma.db.trainingAssignment.findFirst({ where: { employeeId: me.id, itemCode, status: { in: ['ASSIGNED', 'IN_PROGRESS', 'EXAM_PENDING', 'FAILED'] } } }))), user, this.audit, 'LibraryItem', itemCode, 'You are taking this exam, so you cannot read its questions');
     return this.prisma.db.questionBankItem.findMany({ where: { itemCode, status }, orderBy: { createdAt: 'desc' }, take: 300 });
   }
 
@@ -196,7 +197,7 @@ export class LearningService {
     const a = await this.prisma.db.trainingAssignment.findFirst({ where: { id, itemCode: { not: null } } });
     if (!a) throw new NotFoundException('Assignment not found');
     await this.canManage(a.employeeId, user);
-    if ((await this.prisma.db.employee.findFirst({ where: { id: a.employeeId } }))?.userId === user.id) throw new ForbiddenException('You cannot give yourself new attempts');
+    await ownDutyRule((await this.prisma.db.employee.findFirst({ where: { id: a.employeeId } }))?.userId === user.id, user, this.audit, 'TrainingAssignment', a.id, 'You cannot give yourself new attempts');
     if (a.status !== 'FAILED') throw new ConflictException('Only a failed assignment can be given new attempts');
     await this.prisma.db.trainingAssignment.updateMany({ where: { id }, data: { status: 'IN_PROGRESS', attempts: 0 } });
     await this.audit.record({ action: 'training.attempts_reset', entityType: 'TrainingAssignment', entityId: id, after: { by: user.id } });
@@ -274,7 +275,7 @@ export class LearningService {
     await this.canManage(input.employeeId, user);
     const emp = await this.prisma.db.employee.findFirst({ where: { id: input.employeeId } });
     if (!emp) throw new BadRequestException('Unknown employee');
-    if (emp.userId === user.id) throw new ForbiddenException('You cannot evaluate yourself');
+    await ownDutyRule(emp.userId === user.id, user, this.audit, 'Employee', emp.id, 'You cannot evaluate yourself');
     const row = await this.prisma.db.employeeEvaluation.create({ data: { tenantId: '', employeeId: emp.id, evaluatorId: user.id, topic: input.topic, rating: input.rating, notes: input.notes ?? null } });
     await this.audit.record({ action: 'evaluation.recorded', entityType: 'EmployeeEvaluation', entityId: row.id, after: { employeeId: emp.id, rating: input.rating } });
     return row;

@@ -60,12 +60,16 @@ export function currentCorrelationId(): string {
   return storage.getStore()?.correlationId ?? randomUUID();
 }
 
+// The company owner: a direct, company-wide OWNER role. Delegated or branch-limited ownership does not count.
+export const isOwner = (user: RequestUser) => user.roles.some((r) => r.key === 'OWNER' && r.branchId === null);
+
 // Does the actor hold roleKey for the given scope? HQ-wide roles match any branch.
 export function actorHasRole(
   user: RequestUser,
   roleKey: string,
   scope: { branchId?: string | null; legalEntityId?: string | null } = {},
 ): boolean {
+  if (isOwner(user)) return true;
   const direct = user.roles.some(
     (r) =>
       r.key === roleKey &&

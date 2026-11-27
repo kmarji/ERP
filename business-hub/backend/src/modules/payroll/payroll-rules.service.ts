@@ -1,3 +1,4 @@
+import { ownDutyRule } from '../audit/owner-override';
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { dateOnly } from '../../common/time';
@@ -69,7 +70,7 @@ export class PayrollRulesService {
     const row = await this.prisma.db.payrollRuleSet.findFirst({ where: { id } });
     if (!row) throw new NotFoundException('Rule set not found');
     if (row.status === 'RETIRED') throw new ConflictException('A retired rule set cannot be verified');
-    if (row.createdBy === user.id) throw new ConflictException('The author of a rule set cannot be the one who verifies it');
+    await ownDutyRule(row.createdBy === user.id, user, this.audit, 'PayrollRuleSet', id, 'The author of a rule set cannot be the one who verifies it', ConflictException);
     await this.prisma.db.payrollRuleSet.updateMany({ where: { id }, data: { verifiedBy: user.id, verifiedAt: new Date(), verificationNote: note } });
     await this.audit.record({ action: 'payroll_rules.verified', entityType: 'PayrollRuleSet', entityId: id, after: { by: user.id, note } });
     return this.prisma.db.payrollRuleSet.findFirstOrThrow({ where: { id } });

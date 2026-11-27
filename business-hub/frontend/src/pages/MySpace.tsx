@@ -6,6 +6,7 @@ import { api, ApiError, download, upload } from '../lib/api';
 import { cachedGet, flush, isNetworkError, queue, type Photo } from '../lib/offline';
 import { addDays, formatDate, formatJOD, formatTime, localToIso, ymd } from '../lib/format';
 import { useI18n } from '../lib/i18n';
+import { locate } from '../lib/location';
 import { nameOf, useList } from '../lib/lookups';
 
 export default function MySpace() {
@@ -30,13 +31,13 @@ function Punch() {
   const qc = useQueryClient();
   const entries = useQuery({ queryKey: ['me-time'], queryFn: () => api<any[]>('/me/time') });
   const open = entries.data?.find((e) => e.status === 'OPEN');
-  const [geoDenied, setGeoDenied] = useState(false);
-  const where = () => new Promise<{ lat?: number; lng?: number }>((ok) => navigator.geolocation ? navigator.geolocation.getCurrentPosition((p) => { setGeoDenied(false); ok({ lat: p.coords.latitude, lng: p.coords.longitude }); }, () => { setGeoDenied(true); ok({}); }, { timeout: 8000 }) : (setGeoDenied(true), ok({})));
+  const [problem, setProblem] = useState('');
+  const where = async () => { const r = await locate(); setProblem(r.problem ?? ''); return r.fix ?? {}; };
   const go = useMutation({ mutationFn: async (p: string) => api(`/me/${p}`, { method: 'POST', body: p === 'clock-in' ? await where() : {} }), onSuccess: () => qc.invalidateQueries({ queryKey: ['me-time'] }) });
   return (
     <Card className="mb-4">
       <ErrorBox error={go.error} />
-      {geoDenied && go.error && <p className="mb-2 text-sm text-amber-700">Your browser did not share your location. Allow location access for this site (needs https) and try again.</p>}
+      {problem && go.error && <p className="mb-2 text-sm text-amber-700">{problem}</p>}
       <div className="flex items-center gap-3">
         {open ? <><span className="text-sm">Clocked in since {formatDate(open.clockIn)}</span><Button variant="danger" disabled={go.isPending} onClick={() => go.mutate('clock-out')}>Clock out</Button></> : <><span className="text-sm text-slate-600">Not clocked in</span><Button disabled={go.isPending} onClick={() => go.mutate('clock-in')}>Clock in</Button></>}
       </div>
