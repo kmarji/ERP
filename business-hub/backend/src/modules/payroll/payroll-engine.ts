@@ -75,13 +75,13 @@ export function calculatePay(rules: PayrollRules, i: PayInput): PayResult {
   const gross = basic.plus(allowances).plus(overtimePay).plus(otherEarnings).minus(unpaidLeaveDeduction).minus(lateDeduction);
   log('gross', 'basic + allowances + overtime + other - unpaid leave - lateness', gross);
 
-  const subject = Decimal.max(d(0), basic.plus(allowances).minus(unpaidLeaveDeduction));
+  const subject = Decimal.max(d(0), basic.minus(unpaidLeaveDeduction)); // no allowance counts
   const capped = rules.ssc.monthlyCeiling === null ? subject : Decimal.min(subject, d(rules.ssc.monthlyCeiling));
   const eeRate = i.sscEmployeeRate ?? rules.ssc.employeeRate;
   const erRate = i.sscEmployerRate ?? rules.ssc.employerRate;
   const sscEmployee = money(capped.times(eeRate));
   const sscEmployer = money(capped.times(erRate));
-  log('sscSubjectWage', 'basic + allowances - unpaid leave, capped at the ceiling', capped);
+  log('sscSubjectWage', 'basic - unpaid leave, capped at the ceiling', capped);
   log('sscEmployee', `${d(eeRate).times(100)}%${i.sscEmployeeRate != null ? ' (employee fixed ratio)' : ''} of subject wage`, sscEmployee);
   log('sscEmployer', `${d(erRate).times(100)}%${i.sscEmployerRate != null ? ' (employee fixed ratio)' : ''} of subject wage`, sscEmployer);
 

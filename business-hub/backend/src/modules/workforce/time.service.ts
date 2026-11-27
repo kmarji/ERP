@@ -9,6 +9,8 @@ import { PayrollRulesService } from '../payroll/payroll-rules.service';
 import { PolicyService } from '../policy-engine/policy.service';
 import { ApprovalDecidedEvent, APPROVAL_DECIDED, ApprovalService } from '../workflow-engine/approval.service';
 import { ExceptionService } from '../workflow-engine/exception.service';
+import { breakOf, entryOvertime } from './overtime';
+import { WeekService } from './week.service';
 import { employeeOf, MANAGERS, minutes, primaryBranch, weekBounds } from './common';
 
 const CORRECTION = 'time.correction';
@@ -21,6 +23,7 @@ export class TimeService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly rules: PayrollRulesService,
+    private readonly weeks: WeekService,
     private readonly policy: PolicyService,
     private readonly approvals: ApprovalService,
     private readonly exceptions: ExceptionService,
@@ -110,22 +113,19 @@ export class TimeService {
   }
 
   // Worked time net of break, early leave, and overtime from the rules in force.
-  // ponytail: overtime = max(daily excess, weekly excess not already paid as overtime this week); per-entry, not per-day.
   private async compute(employeeId: string, entryId: string, inAt: Date, outAt: Date, scheduleId: string | null) {
     const { rules } = await this.rules.activeFor(this.day(inAt));
     const sch = scheduleId ? await this.prisma.db.shiftSchedule.findFirst({ where: { id: scheduleId } }) : null;
     const tpl = sch?.templateId ? await this.prisma.db.shiftTemplate.findFirst({ where: { id: sch.templateId } }) : null;
     const gross = minutes(inAt, outAt);
-    const breakMinutes = tpl ? tpl.breakMinutes : gross > 360 ? 30 : 0;
+    const breakMinutes = breakOf(gross, tpl?.breakMinutes);
     const worked = Math.max(0, gross - breakMinutes);
     const early = sch ? Math.max(0, minutes(outAt, sch.endAt)) : 0;
-    const wk = weekBounds(this.day(inAt));
+    const wk = weekBounds(this.day(inAt), await this.weeks.startsOn());
     const week = await this.prisma.db.timeEntry.findMany({ where: { employeeId, id: { not: entryId }, status: { in: [...COUNTED] }, clockIn: { gte: wk.start, lt: new Date(wk.end.getTime() + 86_400_000) } } });
     const prevWorked = week.reduce((s, e) => s + (e.workedMinutes ?? 0), 0);
     const prevOt = week.reduce((s, e) => s + (e.overtimeMinutes ?? 0), 0);
-    const dailyOt = Math.max(0, worked - rules.overtime.dailyThresholdMinutes);
-    const weeklyIncrement = Math.max(0, Math.max(0, prevWorked + worked - rules.overtime.weeklyThresholdMinutes) - prevOt);
-    return { breakMinutes, workedMinutes: worked, earlyLeaveMinutes: early, overtimeMinutes: Math.min(worked, Math.max(dailyOt, weeklyIncrement)) };
+    return { breakMinutes, workedMinutes: worked, earlyLeaveMinutes: early, overtimeMinutes: entryOvertime(prevWorked, prevOt, worked, rules.overtime) };
   }
 
   list(f: { employeeId?: string; branchId?: string; from?: string; to?: string; status?: string }) {

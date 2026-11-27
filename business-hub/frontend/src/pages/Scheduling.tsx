@@ -2,85 +2,25 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Select, StatusBadge, Table, Tabs } from '../components/ui';
 import { api } from '../lib/api';
-import { addDays, formatTime, mondayOf } from '../lib/format';
+import { addDays, formatTime } from '../lib/format';
 import { useI18n } from '../lib/i18n';
 import { nameOf, useList } from '../lib/lookups';
+import ScheduleBoard, { Jump, OverLimit } from './ScheduleBoard';
 
 export default function Scheduling() {
   const { t } = useI18n();
-  const [tab, setTab] = useState('Week');
+  const [tab, setTab] = useState('Schedule');
+  const [jump, setJump] = useState<Jump | null>(null);
+  // Only HR and the owner may read these, so a successful read also means "reviewer".
+  const escalations = useQuery({ queryKey: ['escalations'], queryFn: () => api<any[]>('/schedule-escalations'), retry: false, refetchInterval: 60_000 });
+  const reviewer = escalations.isSuccess;
+  const overTab = `Over limit${escalations.data?.length ? ` (${escalations.data.length})` : ''}`;
+  const current = tab === 'Over limit' ? overTab : tab;
   return (
     <div>
-      <PageHeader title={t('Scheduling')} subtitle="Weekly rota per branch, shift templates and swap requests. Shifts publish immediately unless the schedule.approval policy is switched on." />
-      <Tabs tabs={['Week', 'Templates', 'Swaps', 'Approvals', 'Open shifts', 'No-shows', 'Geofence']} value={tab} onChange={setTab} />
-      {tab === 'Week' ? <Week /> : tab === 'Templates' ? <Templates /> : tab === 'Swaps' ? <Swaps /> : tab === 'Approvals' ? <ShiftApprovals /> : tab === 'Open shifts' ? <OpenShifts /> : tab === 'No-shows' ? <NoShows /> : <Geofence />}
-    </div>
-  );
-}
-
-function Week() {
-  const qc = useQueryClient();
-  const branches = useList('/org/branches');
-  const [branchId, setBranchId] = useState('');
-  const [from, setFrom] = useState(mondayOf());
-  const to = addDays(from, 6);
-  const days = Array.from({ length: 7 }, (_, i) => addDays(from, i));
-  const emps = useQuery({ queryKey: ['employees', 'branch', branchId], queryFn: () => api<any[]>(`/employees?branchId=${branchId}&status=ACTIVE`), enabled: !!branchId });
-  const tpls = useQuery({ queryKey: ['templates', branchId], queryFn: () => api<any[]>(`/shift-templates?branchId=${branchId}`), enabled: !!branchId });
-  const shifts = useQuery({ queryKey: ['schedules', branchId, from], queryFn: () => api<any[]>(`/schedules?branchId=${branchId}&from=${from}&to=${to}`), enabled: !!branchId });
-  const [f, setF] = useState({ employeeId: '', date: from, templateId: '' });
-  const refresh = () => qc.invalidateQueries({ queryKey: ['schedules'] });
-  const [reason, setReason] = useState('');
-  const add = useMutation({ mutationFn: (override?: string) => api('/schedules', { body: { branchId, employeeId: f.employeeId, date: f.date, templateId: f.templateId, ...(override && { overrideRestReason: override }) } }), onSuccess: () => { refresh(); setReason(''); } });
-  const restBlock = add.isError && /hours of rest/.test((add.error as Error).message);
-  const cancel = useMutation({ mutationFn: (id: string) => api(`/schedules/${id}/cancel`, { method: 'POST' }), onSuccess: refresh });
-  return (
-    <div className="space-y-4">
-      <ErrorBox error={emps.error ?? shifts.error ?? (restBlock ? null : add.error) ?? cancel.error} />
-      <Card>
-        <div className="mb-3 flex flex-wrap items-end gap-3">
-          <Field label="Branch"><Select value={branchId} onChange={(e) => setBranchId(e.target.value)}><option value="">Select...</option>{branches.data?.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</Select></Field>
-          <Field label="Week starting (Monday)"><Input type="date" value={from} onChange={(e) => e.target.value && setFrom(mondayOf(new Date(`${e.target.value}T00:00:00Z`)))} /></Field>
-          <Button variant="ghost" onClick={() => setFrom(addDays(from, -7))}>&lt;</Button>
-          <Button variant="ghost" onClick={() => setFrom(addDays(from, 7))}>&gt;</Button>
-        </div>
-        {!branchId ? <Empty>Select a branch.</Empty> : (
-          <Table head={['Employee', ...days.map((d) => d.slice(5))]}>
-            {emps.data?.map((e) => (
-              <tr key={e.id}>
-                <td className="px-3 py-2 font-medium">{e.name}</td>
-                {days.map((d) => (
-                  <td key={d} className="px-2 py-2 align-top text-xs">
-                    {shifts.data?.filter((s) => s.employeeId === e.id && s.date.slice(0, 10) === d).map((s) => (
-                      <div key={s.id} className={`mb-1 rounded border px-1 py-0.5 ${s.status === 'PUBLISHED' ? 'border-brand-500 bg-brand-50' : s.status === 'PENDING_APPROVAL' ? 'border-amber-400 bg-amber-50' : 'border-slate-200 text-slate-400 line-through'}`}>
-                        {formatTime(s.startAt)}-{formatTime(s.endAt)}
-                        {s.status === 'PUBLISHED' && <button className="ms-1 text-red-600" title="Cancel shift" onClick={() => cancel.mutate(s.id)}>x</button>}
-                        {s.status === 'LEAVE_CONFLICT' && <StatusBadge status={s.status} />}
-                      </div>
-                    ))}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </Table>
-        )}
-      </Card>
-      {branchId && (
-        <Card title="Publish a shift">
-          <div className="flex flex-wrap items-end gap-3">
-            <Field label="Employee"><Select value={f.employeeId} onChange={(e) => setF({ ...f, employeeId: e.target.value })}><option value="">Select...</option>{emps.data?.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</Select></Field>
-            <Field label="Date"><Input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></Field>
-            <Field label="Template"><Select value={f.templateId} onChange={(e) => setF({ ...f, templateId: e.target.value })}><option value="">Select...</option>{tpls.data?.filter((x) => x.active).map((x) => <option key={x.id} value={x.id}>{x.name} {x.startTime}-{x.endTime}</option>)}</Select></Field>
-            <Button disabled={!f.employeeId || !f.date || !f.templateId || add.isPending} onClick={() => add.mutate(undefined)}>Publish</Button>
-          </div>
-          {restBlock && (
-            <div className="mt-3 rounded border border-amber-300 bg-amber-50 p-3 text-sm">
-              <p className="mb-2 text-amber-900">{(add.error as Error).message}. You can publish anyway; the reason is recorded.</p>
-              <div className="flex gap-2"><Input placeholder="Reason (required)" value={reason} onChange={(e) => setReason(e.target.value)} /><Button disabled={reason.trim().length < 3 || add.isPending} onClick={() => add.mutate(reason.trim())}>Override and publish</Button></div>
-            </div>
-          )}
-        </Card>
-      )}
+      <PageHeader title={t('Scheduling')} subtitle="Rota per branch for any period, shift templates and swap requests. Shifts publish immediately unless the schedule.approval policy is switched on." />
+      <Tabs tabs={['Schedule', ...(reviewer ? [overTab] : []), 'Templates', 'Swaps', 'Approvals', 'Open shifts', 'No-shows', 'Geofence']} value={current} onChange={(t) => { setJump(null); setTab(t.startsWith('Over limit') ? 'Over limit' : t); }} />
+      {tab === 'Schedule' ? <ScheduleBoard jump={jump} reviewer={reviewer} /> : tab === 'Over limit' ? <OverLimit rows={escalations.data ?? []} onView={(j) => { setJump(j); setTab('Schedule'); }} /> : tab === 'Templates' ? <Templates /> : tab === 'Swaps' ? <Swaps /> : tab === 'Approvals' ? <ShiftApprovals /> : tab === 'Open shifts' ? <OpenShifts /> : tab === 'No-shows' ? <NoShows /> : <Geofence />}
     </div>
   );
 }

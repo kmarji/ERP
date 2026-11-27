@@ -1,4 +1,4 @@
-import { Body, Controller, Get, NotFoundException, Param, Patch, Post, Query, Res } from '@nestjs/common';
+import { Body, Controller, Get, NotFoundException, Param, Patch, Post, Put, Query, Res } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { ArrayMaxSize, IsArray, IsBoolean, IsDateString, IsIn, IsInt, IsOptional, IsString, Matches, Max, Min, MinLength, ValidateNested } from 'class-validator';
@@ -10,6 +10,10 @@ import { CoverageService } from './coverage.service';
 import { LeaveService } from './leave.service';
 import { SchedulesService } from './schedules.service';
 import { TimeService } from './time.service';
+import { WeekService } from './week.service';
+import { OverHoursService } from './over-hours.service';
+import { PayrollRulesService } from '../payroll/payroll-rules.service';
+import { assertBranchAccess } from '../../common/tenancy/branch-scope';
 import { employeeOf, MANAGERS } from './common';
 
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -28,6 +32,9 @@ class TemplatePatchDto {
   @IsOptional() @IsInt() @Min(0) @Max(240) breakMinutes?: number;
   @IsOptional() @IsBoolean() active?: boolean;
 }
+class ScheduleSettingsDto {
+  @IsInt() @Min(0) @Max(6) weekStartsOn!: number;
+}
 class ShiftDto {
   @IsString() employeeId!: string;
   @IsString() branchId!: string;
@@ -37,6 +44,24 @@ class ShiftDto {
   @IsOptional() @IsDateString() endAt?: string;
   @IsOptional() @IsString() notes?: string;
   @IsOptional() @IsString() @MinLength(3) overrideRestReason?: string;
+  @IsOptional() @IsString() @MinLength(3) overLimitReason?: string;
+}
+class ShiftChangeDto {
+  @IsDateString() date!: string;
+  @IsOptional() @IsString() templateId?: string;
+  @IsOptional() @IsDateString() startAt?: string;
+  @IsOptional() @IsDateString() endAt?: string;
+  @IsOptional() @IsString() @MinLength(3) overrideRestReason?: string;
+  @IsOptional() @IsString() @MinLength(3) overLimitReason?: string;
+}
+class RangeDto {
+  @IsDateString() from!: string;
+  @IsDateString() to!: string;
+}
+class EscalationDto {
+  @IsIn(['approve', 'instruct']) action!: 'approve' | 'instruct';
+  @IsOptional() @IsString() comment?: string;
+  @IsOptional() @IsInt() minutes?: number;
 }
 class BulkDto {
   @IsArray() @ArrayMaxSize(200) @ValidateNested({ each: true }) @Type(() => ShiftDto) shifts!: ShiftDto[];
@@ -116,7 +141,7 @@ class LeaveDto {
 @ApiBearerAuth()
 @Controller()
 export class WorkforceController {
-  constructor(private readonly schedules: SchedulesService, private readonly time: TimeService, private readonly leave: LeaveService, private readonly coverage: CoverageService, private readonly prisma: PrismaService) {}
+  constructor(private readonly schedules: SchedulesService, private readonly time: TimeService, private readonly leave: LeaveService, private readonly coverage: CoverageService, private readonly prisma: PrismaService, private readonly weeks: WeekService, private readonly rules: PayrollRulesService, private readonly overHours: OverHoursService) {}
 
   // ---- geofence, open shifts, no-show coverage
   @Roles('OWNER', 'HR') @Post('branches/:id/geofence') async geofence(@Param('id') id: string, @Body() dto: GeofenceDto) {
@@ -139,10 +164,23 @@ export class WorkforceController {
   @Roles(...MANAGERS) @Post('schedules/:id/cover') cover(@Param('id') id: string, @Body() dto: EmployeeIdDto, @CurrentUser() u: RequestUser) { return this.coverage.cover(id, dto.employeeId, u); }
 
   // ---- schedules
+  @Roles(...MANAGERS) @Get('schedule-settings') async scheduleSettings() {
+    const { rules } = await this.rules.activeFor(new Date());
+    return { weekStartsOn: await this.weeks.startsOn(), maxWeeklyMinutes: rules.scheduling.maxWeeklyMinutes };
+  }
+  @Roles('OWNER', 'HR') @Put('schedule-settings') async setScheduleSettings(@Body() dto: ScheduleSettingsDto, @CurrentUser() u: RequestUser) {
+    assertBranchAccess(u, '', ['OWNER', 'HR']); // '' matches company-wide roles only
+    await this.weeks.setStartsOn(dto.weekStartsOn, u);
+    return this.scheduleSettings();
+  }
   @Roles(...MANAGERS) @Get('shift-templates') templates(@Query('branchId') b?: string) { return this.schedules.listTemplates(b); }
   @Roles(...MANAGERS) @Post('shift-templates') createTemplate(@Body() dto: TemplateDto, @CurrentUser() u: RequestUser) { return this.schedules.createTemplate(dto, u); }
   @Roles(...MANAGERS) @Patch('shift-templates/:id') patchTemplate(@Param('id') id: string, @Body() dto: TemplatePatchDto, @CurrentUser() u: RequestUser) { return this.schedules.patchTemplate(id, dto, u); }
   @Roles(...MANAGERS) @Get('schedules') listSchedules(@Query() q: { branchId?: string; employeeId?: string; from?: string; to?: string }) { return this.schedules.list(q); }
+  @Roles(...MANAGERS) @Get('schedules/summary') summary(@Query() q: RangeDto) { return this.schedules.summary(q.from, q.to); }
+  @Roles(...MANAGERS) @Patch('schedules/:id') changeShift(@Param('id') id: string, @Body() dto: ShiftChangeDto, @CurrentUser() u: RequestUser) { return this.schedules.update(id, dto, u); }
+  @Roles('OWNER', 'HR') @Get('schedule-escalations') escalations(@CurrentUser() u: RequestUser) { return this.overHours.list(u); }
+  @Roles('OWNER', 'HR') @Post('schedule-escalations/:id/decide') decideEscalation(@Param('id') id: string, @Body() dto: EscalationDto, @CurrentUser() u: RequestUser) { return this.overHours.decide(id, dto, u); }
   @Roles(...MANAGERS) @Post('schedules') createShift(@Body() dto: ShiftDto, @CurrentUser() u: RequestUser) { return this.schedules.create(dto, u); }
   @Roles(...MANAGERS) @Post('schedules/bulk') bulk(@Body() dto: BulkDto, @CurrentUser() u: RequestUser) { return this.schedules.bulk(dto.shifts, u); }
   @Roles(...MANAGERS) @Post('schedules/:id/cancel') cancelShift(@Param('id') id: string, @CurrentUser() u: RequestUser) { return this.schedules.cancel(id, u); }

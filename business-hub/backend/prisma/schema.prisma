@@ -2368,6 +2368,7 @@ model ShiftSchedule {
   status     String   @default("PUBLISHED") // PUBLISHED | CANCELLED | LEAVE_CONFLICT
   notes      String?
   restOverrideReason String?
+  overLimitReason String?
   createdBy  String
   createdAt  DateTime @default(now())
   noShowAt   DateTime? // set once when the no-show exception is raised

@@ -4,6 +4,9 @@ import { assertBranchAccess } from '../../common/tenancy/branch-scope';
 import { RequestUser } from '../../common/tenancy/tenant-context';
 import { AuditService } from '../audit/audit.service';
 import { PayrollRulesService } from '../payroll/payroll-rules.service';
+import { COUNTED_SHIFTS, OverHoursService } from './over-hours.service';
+import { breakOf, overtimeMinutes } from './overtime';
+import { WeekService } from './week.service';
 import { atLocal, employeeOf, MANAGERS, minutes, weekBounds } from './common';
 
 export interface ShiftInput {
@@ -15,6 +18,7 @@ export interface ShiftInput {
   endAt?: string;
   notes?: string;
   overrideRestReason?: string; // a manager knowingly schedules with less than the minimum rest
+  overLimitReason?: string; // ... or past the weekly maximum, which escalates to HR and the owner
 }
 
 @Injectable()
@@ -23,6 +27,8 @@ export class SchedulesService {
     private readonly prisma: PrismaService,
     private readonly rules: PayrollRulesService,
     private readonly audit: AuditService,
+    private readonly weeks: WeekService,
+    private readonly overHours: OverHoursService,
   ) {}
 
   // ---------------------------------------------------------------- templates
@@ -65,7 +71,7 @@ export class SchedulesService {
   }
 
   // The checks every schedule change goes through, including swaps.
-  async validate(employeeId: string, branchId: string, date: Date, startAt: Date, endAt: Date, ignoreId?: string, opts: { skipRest?: boolean } = {}) {
+  async validate(employeeId: string, branchId: string, date: Date, startAt: Date, endAt: Date, ignoreId?: string, opts: { skipRest?: boolean; allowOver?: boolean } = {}) {
     const emp = await this.prisma.db.employee.findFirst({ where: { id: employeeId } });
     if (!emp || !['ACTIVE', 'ONBOARDING'].includes(emp.status)) throw new ConflictException('Employee is not active');
     const assigned = await this.prisma.db.employeeAssignment.findFirst({ where: { employeeId, branchId, validFrom: { lte: date }, OR: [{ validTo: null }, { validTo: { gte: date } }] } });
@@ -79,10 +85,7 @@ export class SchedulesService {
     if (!opts.skipRest && await this.prisma.db.shiftSchedule.findFirst({ where: { ...others, OR: [{ endAt: { gt: new Date(startAt.getTime() - rest), lte: startAt } }, { startAt: { gte: endAt, lt: new Date(endAt.getTime() + rest) } }] } })) {
       throw new ConflictException(`Less than ${rules.scheduling.minRestHours} hours of rest between shifts`);
     }
-    const wk = weekBounds(date);
-    const week = await this.prisma.db.shiftSchedule.findMany({ where: { ...others, date: { gte: wk.start, lte: wk.end } } });
-    const total = week.reduce((s, w) => s + minutes(w.startAt, w.endAt), 0) + minutes(startAt, endAt);
-    if (total > rules.scheduling.maxWeeklyMinutes) throw new ConflictException(`Exceeds the weekly maximum of ${rules.scheduling.maxWeeklyMinutes / 60} hours`);
+    await this.overHours.check(employeeId, date, minutes(startAt, endAt), ignoreId, !!opts.allowOver);
   }
 
   // A16/A17: companies switch approval on in the 'schedule.approval' policy; shifts then wait as PENDING_APPROVAL.
@@ -97,11 +100,31 @@ export class SchedulesService {
     const { startAt, endAt } = await this.bounds(input);
     const date = new Date(`${input.date.slice(0, 10)}T00:00:00.000Z`);
     const override = input.overrideRestReason?.trim() || null;
-    await this.validate(input.employeeId, input.branchId, date, startAt, endAt, undefined, { skipRest: !!override });
+    const over = input.overLimitReason?.trim() || null;
+    await this.validate(input.employeeId, input.branchId, date, startAt, endAt, undefined, { skipRest: !!override, allowOver: !!over });
     const pending = !opts.skipApproval && (await this.approvalRequired());
-    const row = await this.prisma.db.shiftSchedule.create({ data: { tenantId: '', employeeId: input.employeeId, branchId: input.branchId, date, startAt, endAt, templateId: input.templateId ?? null, notes: input.notes ?? null, status: pending ? 'PENDING_APPROVAL' : 'PUBLISHED', restOverrideReason: override, createdBy: user.id } });
+    const row = await this.prisma.db.shiftSchedule.create({ data: { tenantId: '', employeeId: input.employeeId, branchId: input.branchId, date, startAt, endAt, templateId: input.templateId ?? null, notes: input.notes ?? null, status: pending ? 'PENDING_APPROVAL' : 'PUBLISHED', restOverrideReason: override, overLimitReason: over, createdBy: user.id } });
     await this.audit.record({ action: pending ? 'schedule.submitted' : 'schedule.published', entityType: 'ShiftSchedule', entityId: row.id, after: { employeeId: row.employeeId, date: input.date, ...(override && { restOverrideReason: override }) } });
+    await this.overHours.sync(row.employeeId, row.date, over ? { userId: user.id, reason: over } : undefined);
     return row;
+  }
+
+  async update(id: string, input: Omit<ShiftInput, 'employeeId' | 'branchId'>, user: RequestUser) {
+    const s = await this.prisma.db.shiftSchedule.findFirst({ where: { id } });
+    if (!s) throw new NotFoundException('Shift not found');
+    assertBranchAccess(user, s.branchId, MANAGERS);
+    if (!COUNTED_SHIFTS.includes(s.status)) throw new ConflictException(`Shift is ${s.status}`);
+    const { startAt, endAt } = await this.bounds({ ...input, branchId: s.branchId });
+    const date = new Date(`${input.date.slice(0, 10)}T00:00:00.000Z`);
+    const override = input.overrideRestReason?.trim() || null;
+    const over = input.overLimitReason?.trim() || null;
+    await this.validate(s.employeeId, s.branchId, date, startAt, endAt, s.id, { skipRest: !!override, allowOver: !!over });
+    const status = (await this.approvalRequired()) ? 'PENDING_APPROVAL' : 'PUBLISHED';
+    await this.prisma.db.shiftSchedule.updateMany({ where: { id }, data: { date, startAt, endAt, templateId: input.templateId ?? null, status, restOverrideReason: override, overLimitReason: over, createdBy: user.id, noShowAt: null } });
+    await this.audit.record({ action: 'schedule.changed', entityType: 'ShiftSchedule', entityId: id, before: { date: s.date, startAt: s.startAt, endAt: s.endAt }, after: { date, startAt, endAt, status, ...(override && { restOverrideReason: override }), ...(over && { overLimitReason: over }) } });
+    await this.overHours.sync(s.employeeId, date, over ? { userId: user.id, reason: over } : undefined);
+    await this.overHours.sync(s.employeeId, s.date); // the week it moved out of
+    return this.prisma.db.shiftSchedule.findFirstOrThrow({ where: { id } });
   }
 
   // Decision history is the audit trail (who, when, outcome). The author cannot approve their own shift unless OWNER or HR.
@@ -111,9 +134,10 @@ export class SchedulesService {
     assertBranchAccess(user, s.branchId, MANAGERS);
     if (s.status !== 'PENDING_APPROVAL') throw new ConflictException(`Shift is ${s.status}`);
     if (s.createdBy === user.id && !user.roles.some((r) => ['OWNER', 'HR'].includes(r.key))) throw new ForbiddenException('Another manager must approve your shift');
-    if (approve) await this.validate(s.employeeId, s.branchId, s.date, s.startAt, s.endAt, s.id, { skipRest: !!s.restOverrideReason });
+    if (approve) await this.validate(s.employeeId, s.branchId, s.date, s.startAt, s.endAt, s.id, { skipRest: !!s.restOverrideReason, allowOver: true }); // the limit was enforced when it was saved
     await this.prisma.db.shiftSchedule.updateMany({ where: { id, status: 'PENDING_APPROVAL' }, data: { status: approve ? 'PUBLISHED' : 'CANCELLED' } });
     await this.audit.record({ action: approve ? 'schedule.approved' : 'schedule.rejected', entityType: 'ShiftSchedule', entityId: id, after: { by: user.id } });
+    if (!approve) await this.overHours.sync(s.employeeId, s.date);
     return this.prisma.db.shiftSchedule.findFirstOrThrow({ where: { id } });
   }
 
@@ -132,7 +156,30 @@ export class SchedulesService {
   }
 
   list(f: { branchId?: string; employeeId?: string; from?: string; to?: string }) {
-    return this.prisma.db.shiftSchedule.findMany({ where: { branchId: f.branchId, employeeId: f.employeeId, date: { ...(f.from ? { gte: new Date(f.from) } : {}), ...(f.to ? { lte: new Date(f.to) } : {}) } }, orderBy: { startAt: 'asc' }, take: 500 });
+    return this.prisma.db.shiftSchedule.findMany({ where: { branchId: f.branchId, employeeId: f.employeeId, date: { ...(f.from ? { gte: new Date(f.from) } : {}), ...(f.to ? { lte: new Date(f.to) } : {}) } }, orderBy: { startAt: 'asc' }, take: 5000 });
+  }
+
+  // Per employee and week: planned hours and the overtime those shifts would produce. Whole weeks touching the range.
+  async summary(from: string, to: string) {
+    const startsOn = await this.weeks.startsOn();
+    const first = weekBounds(new Date(from), startsOn).start;
+    const last = weekBounds(new Date(to), startsOn).end;
+    if (last.getTime() - first.getTime() > 100 * 86_400_000 || last < first) throw new BadRequestException('Choose a range of up to 62 days');
+    const { rules } = await this.rules.activeFor(new Date(from));
+    const shifts = await this.prisma.db.shiftSchedule.findMany({ where: { status: { in: COUNTED_SHIFTS }, date: { gte: first, lte: last } }, orderBy: { startAt: 'asc' } });
+    const templates = await this.prisma.db.shiftTemplate.findMany();
+    const weeks = new Map<string, { employeeId: string; weekStart: string; gross: number[]; worked: number[] }>();
+    for (const s of shifts) {
+      const weekStart = weekBounds(s.date, startsOn).start.toISOString().slice(0, 10);
+      const key = `${s.employeeId}:${weekStart}`;
+      const w = weeks.get(key) ?? { employeeId: s.employeeId, weekStart, gross: [], worked: [] };
+      const gross = minutes(s.startAt, s.endAt);
+      w.gross.push(gross);
+      w.worked.push(Math.max(0, gross - breakOf(gross, templates.find((t) => t.id === s.templateId)?.breakMinutes)));
+      weeks.set(key, w);
+    }
+    const sum = (a: number[]) => a.reduce((x, y) => x + y, 0);
+    return [...weeks.values()].map((w) => ({ employeeId: w.employeeId, weekStart: w.weekStart, minutes: sum(w.gross), overLimit: sum(w.gross) > rules.scheduling.maxWeeklyMinutes, expectedOvertimeMinutes: sum(overtimeMinutes(w.worked, rules.overtime)) }));
   }
 
   async cancel(id: string, user: RequestUser) {
@@ -141,6 +188,7 @@ export class SchedulesService {
     assertBranchAccess(user, s.branchId, MANAGERS);
     await this.prisma.db.shiftSchedule.updateMany({ where: { id }, data: { status: 'CANCELLED' } });
     await this.audit.record({ action: 'schedule.cancelled', entityType: 'ShiftSchedule', entityId: id });
+    await this.overHours.sync(s.employeeId, s.date);
     return { cancelled: true };
   }
 
@@ -175,6 +223,7 @@ export class SchedulesService {
       if (s.employeeId !== sw.fromEmployeeId || s.status !== 'PUBLISHED') throw new ConflictException('The shift changed since the request');
       await this.validate(sw.toEmployeeId, s.branchId, s.date, s.startAt, s.endAt, s.id);
       await this.prisma.db.shiftSchedule.updateMany({ where: { id: s.id }, data: { employeeId: sw.toEmployeeId } });
+      for (const employeeId of [sw.fromEmployeeId, sw.toEmployeeId]) await this.overHours.sync(employeeId, s.date);
     }
     await this.prisma.db.shiftSwapRequest.updateMany({ where: { id }, data: { status: approve ? 'APPROVED' : 'REJECTED', decidedBy: user.id, decidedAt: new Date() } });
     await this.audit.record({ action: approve ? 'swap.approved' : 'swap.rejected', entityType: 'ShiftSwapRequest', entityId: id });

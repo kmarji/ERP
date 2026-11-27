@@ -9,9 +9,9 @@ export const DAY = 86_400_000;
 export const atLocal = (date: string, hhmm: string, plusDays = 0) => new Date(new Date(`${date.slice(0, 10)}T${hhmm}:00+03:00`).getTime() + plusDays * DAY);
 export const minutes = (a: Date, b: Date) => Math.round((b.getTime() - a.getTime()) / 60_000);
 
-// ISO week (Mon-Sun) containing a UTC-midnight date.
-export function weekBounds(date: Date) {
-  const start = new Date(date.getTime() - ((date.getUTCDay() + 6) % 7) * DAY);
+// The 7-day week containing a UTC-midnight date; startsOn is the company's first day (0 = Sunday, default Monday).
+export function weekBounds(date: Date, startsOn = 1) {
+  const start = new Date(date.getTime() - ((date.getUTCDay() - startsOn + 7) % 7) * DAY);
   return { start, end: new Date(start.getTime() + 6 * DAY) };
 }
 

@@ -2,16 +2,21 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Select, StatusBadge, Table } from '../components/ui';
 import { api } from '../lib/api';
-import { addDays, formatDate, localToIso, mondayOf } from '../lib/format';
+import { addDays, formatDate, localToIso, weekStartOf } from '../lib/format';
 import { useI18n } from '../lib/i18n';
 import { nameOf, useList } from '../lib/lookups';
+import { useScheduleSettings } from './ScheduleBoard';
 
 export default function TimeAttendance() {
   const { t } = useI18n();
   const qc = useQueryClient();
   const branches = useList('/org/branches');
   const emps = useList('/employees');
-  const [f, setF] = useState({ branchId: '', status: '', from: mondayOf(), to: addDays(mondayOf(), 6) });
+  const settings = useScheduleSettings();
+  const [picked, setF] = useState({ branchId: '', status: '', from: '', to: '' });
+  // Until dates are chosen, show the current company week.
+  const week = weekStartOf(settings.data?.weekStartsOn ?? 1);
+  const f = { ...picked, from: picked.from || week, to: picked.to || addDays(week, 6) };
   const [m, setM] = useState({ employeeId: '', branchId: '', clockIn: '', clockOut: '', note: '' });
   const qs = new URLSearchParams(Object.entries(f).filter(([, v]) => v)).toString();
   const list = useQuery({ queryKey: ['time-entries', qs], queryFn: () => api<any[]>(`/time-entries?${qs}`) });

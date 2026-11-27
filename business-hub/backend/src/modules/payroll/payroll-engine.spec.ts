@@ -9,20 +9,20 @@ describe('payroll engine', () => {
   it('calculates a full month with social security and annualized income tax', () => {
     const r = calculatePay(rules, base);
     expect(r.gross).toEqual(d(700));
-    expect(r.sscEmployee).toEqual(d('52.5')); // 7.5% of 700
-    expect(r.sscEmployer).toEqual(d('99.75')); // 14.25% of 700
-    // taxable (700-52.5)*12 = 7770 - exemption 9000 < 0
+    expect(r.sscEmployee).toEqual(d(45)); // 7.5% of basic 600; allowances do not count
+    expect(r.sscEmployer).toEqual(d('85.5')); // 14.25% of 600
+    // taxable (700-45)*12 = 7860 - exemption 9000 < 0
     expect(r.incomeTax).toEqual(d(0));
-    expect(r.net).toEqual(d('647.5'));
+    expect(r.net).toEqual(d(655));
     expect(r.trace.map((t) => t.step)).toEqual(expect.arrayContaining(['proration', 'gross', 'sscEmployee', 'incomeTax', 'net']));
   });
 
   it('uses an employee fixed SSC and income tax ratio instead of the rule set', () => {
     const r = calculatePay(rules, { ...base, sscEmployeeRate: 0.05, sscEmployerRate: 0.1, incomeTaxRate: 0.1 });
-    expect(r.sscEmployee).toEqual(d(35)); // 5% of 700
-    expect(r.sscEmployer).toEqual(d(70));
-    expect(r.incomeTax).toEqual(d('66.5')); // 10% of (700 - 35)
-    expect(r.net).toEqual(d('598.5'));
+    expect(r.sscEmployee).toEqual(d(30)); // 5% of basic 600
+    expect(r.sscEmployer).toEqual(d(60));
+    expect(r.incomeTax).toEqual(d(67)); // 10% of (700 - 30)
+    expect(r.net).toEqual(d(603));
     expect(calculatePay(rules, { ...base, sscEmployeeRate: 0 }).sscEmployee).toEqual(d(0)); // zero is a real ratio, not "unset"
   });
 
@@ -40,6 +40,7 @@ describe('payroll engine', () => {
     const leave = calculatePay(rules, { ...base, unpaidLeaveDays: 2 });
     expect(leave.unpaidLeaveDeduction).toEqual(d(40)); // 600/30 x 2
     expect(leave.gross).toEqual(d(660));
+    expect(leave.sscEmployee).toEqual(d(42)); // 7.5% of (600 - 40)
   });
 
   it('pays overtime at the hourly rate times the multiplier', () => {

@@ -270,7 +270,7 @@ function SalaryPackage({ e }: { e: any }) {
       <ErrorBox error={contracts.error ?? add.error} />
       {!current ? <Empty>No salary package.</Empty> : (
         <>
-          <Facts cols="sm:grid-cols-3" items={[['Basic salary', formatJOD(current.salaryBasic, lang)], ['Social security salary (before any ceiling)', formatJOD(total, lang)], ['Total salary', formatJOD(total, lang)]]} />
+          <Facts cols="sm:grid-cols-3" items={[['Basic salary', formatJOD(current.salaryBasic, lang)], ['Social security salary (before any ceiling)', formatJOD(current.salaryBasic, lang)], ['Total salary', formatJOD(total, lang)]]} />
           <div className="mt-3 border-t border-slate-200 pt-3">
             <h3 className="mb-2 text-sm font-semibold text-brand-700">Allowances</h3>
             {allowances.length ? <Facts cols="sm:grid-cols-3" items={allowances.map((a, i): [string, ReactNode] => [allowances.findIndex((x) => x.name === a.name) === i ? a.name : `${a.name} (${i + 1})`, formatJOD(a.amount, lang)])} /> : <p className="text-sm text-slate-500">None.</p>}

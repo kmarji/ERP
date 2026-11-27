@@ -15,6 +15,13 @@ export const formatDate = (d: string | Date | null | undefined) =>
 export const formatTime = (d: string | Date) => new Date(d).toLocaleTimeString('en-GB', { timeZone: 'Asia/Amman', hour: '2-digit', minute: '2-digit' });
 export const ymd = (d: Date) => d.toISOString().slice(0, 10);
 export const addDays = (s: string, n: number) => ymd(new Date(new Date(`${s}T00:00:00Z`).getTime() + n * 86_400_000));
-export const mondayOf = (d = new Date()) => addDays(ymd(d), -((d.getUTCDay() + 6) % 7));
+// First day of the company week containing d; startsOn 0 = Sunday.
+export const weekStartOf = (startsOn: number, d = new Date()) => addDays(ymd(d), -((d.getUTCDay() - startsOn + 7) % 7));
+// Same day n months on, clamped to the month's last day.
+export const addMonths = (s: string, n: number) => {
+  const d = new Date(`${s}T00:00:00Z`);
+  const last = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + n + 1, 0)).getUTCDate();
+  return ymd(new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + n, Math.min(d.getUTCDate(), last))));
+};
 // <input type="datetime-local"> value -> ISO instant (browser time zone).
 export const localToIso = (v: string) => new Date(v).toISOString();
