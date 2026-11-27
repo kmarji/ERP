@@ -1,6 +1,6 @@
 import { FormEvent, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { api, Btn, Card, Err, Field, inputCls, Tags, useAsync, useLang } from '../lib';
+import { api, Btn, Card, Err, Field, inputCls, Tags, useAsync, useLang, BASE } from '../lib';
 
 interface View {
   vacancy: { title: string; titleAr?: string; branch: string };
@@ -137,7 +137,7 @@ function Missing({ token, missing, run }: { token: string; missing: string[]; ru
 
 function Offer({ token, offer, run }: { token: string; offer: { status: string; startDate: string }; run: Run }) {
   const { t, lang } = useLang();
-  const contract = useAsync(() => api<{ contractText: { en: string; ar: string } | null; salaryBasic: string; number: string }>(`/apply/status/${token}/offer`), [token, offer.status]);
+  const contract = useAsync(() => api<{ contractText: { en: string; ar: string } | null; hasPdf: boolean; salaryBasic: string; number: string }>(`/apply/status/${token}/offer`), [token, offer.status]);
   const [name, setName] = useState('');
   const [agree, setAgree] = useState(false);
   const [reason, setReason] = useState('');
@@ -150,6 +150,7 @@ function Offer({ token, offer, run }: { token: string; offer: { status: string; 
         // Contract HTML is rendered in a fully sandboxed frame: no scripts, no navigation.
         <iframe title={t('Contract', 'العقد')} sandbox="" srcDoc={lang === 'ar' ? c.contractText.ar : c.contractText.en} className="mb-3 h-80 w-full rounded border border-slate-200 bg-white" />
       )}
+      {c?.hasPdf && <a href={`${BASE}/apply/status/${token}/offer/contract`} target="_blank" rel="noopener noreferrer" className="mb-3 flex min-h-11 items-center justify-center rounded-lg border border-brand-600 px-3 py-2 font-medium text-brand-700">{t('Open your contract (PDF)', 'افتح العقد (PDF)')}</a>}
       {offer.status === 'SENT' && (
         <>
           <Field label={t('Type your full name as your signature', 'اكتب اسمك الكامل كتوقيع')}><input className={inputCls} minLength={2} maxLength={100} value={name} onChange={(e) => setName(e.target.value)} /></Field>

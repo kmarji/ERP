@@ -1,5 +1,5 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
-import { Test } from '@nestjs/testing';
+import { Test, TestingModuleBuilder } from '@nestjs/testing';
 import { randomUUID } from 'node:crypto';
 import * as request from 'supertest';
 import { AppModule } from '../src/app.module';
@@ -7,8 +7,8 @@ import { PrismaService } from '../src/common/prisma/prisma.service';
 
 export const PASSWORD = 'correct-horse-battery';
 
-export async function createApp() {
-  const mod = await Test.createTestingModule({ imports: [AppModule] }).compile();
+export async function createApp(override: (b: TestingModuleBuilder) => TestingModuleBuilder = (b) => b) {
+  const mod = await override(Test.createTestingModule({ imports: [AppModule] })).compile();
   const app: INestApplication = mod.createNestApplication();
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
   await app.init();

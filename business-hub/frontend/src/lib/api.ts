@@ -33,10 +33,11 @@ export async function api<T = any>(path: string, init: { method?: string; body?:
   return data as T;
 }
 
-export async function upload<T = any>(path: string, file: File): Promise<T> {
+export async function upload<T = any>(path: string, file: File, fields: Record<string, string> = {}, method = 'POST'): Promise<T> {
   const form = new FormData();
+  for (const [k, v] of Object.entries(fields)) form.append(k, v);
   form.append('file', file);
-  const res = await fetch(`${BASE}${path}`, { method: 'POST', headers: { Authorization: `Bearer ${auth.get()}` }, body: form });
+  const res = await fetch(`${BASE}${path}`, { method, headers: { Authorization: `Bearer ${auth.get()}` }, body: form });
   const data = await res.json();
   if (!res.ok) throw new ApiError(res.status, data?.message ?? res.statusText);
   return data as T;

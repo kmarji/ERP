@@ -2132,6 +2132,7 @@ model Offer {
   status             OfferStatus @default(DRAFT)
   contractText       Json? // {en, ar}
   contractDocId      String?
+  templateId         String? // contract template used; null = built-in text
   candidateSignedAt  DateTime?
   candidateSignature String?
   countersignedBy    String?
@@ -3025,4 +3026,19 @@ model CorrectiveAction {
   @@unique([tenantId, number])
   @@index([tenantId, branchId, status])
   @@index([tenantId, source, sourceId])
+}
+
+model ContractTemplate {
+  id           String   @id @default(uuid())
+  tenantId     String
+  name         String
+  contractType String? // OPEN | FIXED_TERM | null = both
+  filename     String
+  storageKey   String
+  active       Boolean  @default(true)
+  createdBy    String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([tenantId, active])
 }

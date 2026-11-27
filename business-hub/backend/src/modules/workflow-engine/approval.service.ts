@@ -60,7 +60,7 @@ export class ApprovalService {
   list(user: RequestUser, status: 'PENDING' | 'APPROVED' | 'REJECTED' = 'PENDING') {
     return this.prisma.db.approval.findMany({
       // OWNER may decide any approval (see decide), so it sees every one, not just those routed to OWNER.
-      where: { status, ...(user.roles.some((r) => r.key === 'OWNER' && r.branchId === null) ? {} : { OR: roleVisibility(user, 'approverRole') }) },
+      where: { status, OR: roleVisibility(user, 'approverRole') },
       orderBy: { createdAt: 'asc' },
       take: 200,
     });

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Module, Param, Post, Query, Req, UploadedFile, UseInterceptors, BadRequestException } from '@nestjs/common';
+import { Body, Controller, Get, Module, Param, Patch, Post, Put, Res, Query, Req, UploadedFile, UseInterceptors, BadRequestException } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
@@ -9,6 +9,8 @@ import { RequestUser } from '../../common/tenancy/tenant-context';
 import { CurrentUser, Public, Roles } from '../auth/auth.decorators';
 import { OperationsModule } from '../operations/operations.module';
 import { OnboardingService } from './onboarding.service';
+import { PdfConverter, SofficeConverter } from './pdf';
+import { ContractTemplatesService } from './templates.service';
 
 class AllowanceDto {
   @IsString() name!: string;
@@ -23,7 +25,29 @@ class OfferDto {
   @IsOptional() @IsDateString() endDate?: string;
   @IsOptional() @IsInt() @Min(0) @Max(24) probationMonths?: number;
   @IsOptional() @IsNumber() @Min(1) weeklyHours?: number;
+  @IsOptional() @IsString() templateId?: string;
 }
+
+class TemplateDto {
+  @IsString() @MinLength(2) @MaxLength(80) name!: string;
+  @IsOptional() @IsIn(['', 'OPEN', 'FIXED_TERM']) contractType?: string;
+}
+
+class TemplateChangeDto {
+  @IsOptional() @IsString() @MinLength(2) @MaxLength(80) name?: string;
+  @IsOptional() @IsIn(['', 'OPEN', 'FIXED_TERM']) contractType?: string;
+  @IsOptional() @IsBoolean() active?: boolean;
+}
+
+const attach = (res: any, filename: string, type: string, data: Buffer, how = 'attachment') => {
+  res.setHeader('Content-Type', type);
+  res.setHeader('Content-Disposition', `${how}; filename="${encodeURIComponent(filename)}"`);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cache-Control', 'no-store');
+  res.send(data);
+};
+const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+const templateFile = FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024 } });
 
 class AcceptDto {
   @IsString() @MinLength(2) @MaxLength(100) signatureName!: string;
@@ -51,7 +75,42 @@ const HR = ['HR', 'OWNER'];
 @ApiTags('onboarding')
 @Controller()
 class OnboardingController {
-  constructor(private readonly svc: OnboardingService) {}
+  constructor(private readonly svc: OnboardingService, private readonly templates: ContractTemplatesService) {}
+
+  // ---------------------------------------------------------------- contract templates
+  @ApiBearerAuth() @Roles('HR', 'OWNER', 'FINANCE') @Get('contract-templates') listTemplates() {
+    return this.templates.list();
+  }
+
+  @ApiBearerAuth() @Roles(...HR) @ApiConsumes('multipart/form-data') @UseInterceptors(templateFile) @Post('contract-templates')
+  addTemplate(@Body() dto: TemplateDto, @UploadedFile() file: Express.Multer.File, @CurrentUser() u: RequestUser) {
+    return this.templates.create(dto, file, u);
+  }
+
+  @ApiBearerAuth() @Roles(...HR) @Patch('contract-templates/:id') changeTemplate(@Param('id') id: string, @Body() dto: TemplateChangeDto) {
+    return this.templates.change(id, dto);
+  }
+
+  @ApiBearerAuth() @Roles(...HR) @ApiConsumes('multipart/form-data') @UseInterceptors(templateFile) @Put('contract-templates/:id/file')
+  replaceTemplate(@Param('id') id: string, @UploadedFile() file: Express.Multer.File) {
+    return this.templates.replace(id, file);
+  }
+
+  @ApiBearerAuth() @Roles('HR', 'OWNER', 'FINANCE') @Get('contract-templates/:id/download') async downloadTemplate(@Param('id') id: string, @Res() res: any) {
+    const f = await this.templates.file(id);
+    attach(res, f.filename, DOCX, f.data);
+  }
+
+  @ApiBearerAuth() @Roles('HR', 'OWNER', 'FINANCE') @Get('offers/:id/contract') async contract(@Param('id') id: string, @Res() res: any) {
+    const { doc, data } = await this.svc.contractFile(id);
+    res.setHeader('Content-Security-Policy', 'sandbox');
+    attach(res, doc.filename, doc.mimeType, data);
+  }
+
+  @Public() @Throttle({ default: { limit: 30, ttl: 60_000 } }) @Get('apply/status/:token/offer/contract') async candidateContract(@Param('token') token: string, @Res() res: any) {
+    const { doc, data } = await this.svc.candidateContract(token);
+    attach(res, doc.filename, doc.mimeType, data, 'inline');
+  }
 
   // ---------------------------------------------------------------- staff
   @ApiBearerAuth() @Roles('HR', 'OWNER', 'FINANCE') @Post('applications/:id/offer') create(@Param('id') id: string, @Body() dto: OfferDto, @CurrentUser() u: RequestUser) {
@@ -115,5 +174,5 @@ class OnboardingController {
   }
 }
 
-@Module({ imports: [OperationsModule], controllers: [OnboardingController], providers: [OnboardingService], exports: [OnboardingService] })
+@Module({ imports: [OperationsModule], controllers: [OnboardingController], providers: [OnboardingService, ContractTemplatesService, { provide: PdfConverter, useClass: SofficeConverter }], exports: [OnboardingService] })
 export class OnboardingModule {}

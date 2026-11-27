@@ -314,7 +314,7 @@ export class PayrollService implements OnModuleInit {
         await this.fire(run.id, 'declined');
         return;
       }
-      const ownerDecided = e.decidedBy === run.createdBy && !!(await this.prisma.db.userRole.findFirst({ where: { userId: e.decidedBy, branchId: null, role: { key: 'OWNER' } } }));
+      const ownerDecided = e.decidedBy === run.createdBy && !!(await this.prisma.db.userRole.findFirst({ where: { userId: e.decidedBy, branchId: null, legalEntityId: null, role: { key: 'OWNER' } } }));
       if (ownerDecided) await this.audit.record({ action: 'owner.override', entityType: 'PayrollRun', entityId: run.id, after: { rule: 'The person who prepared the payroll cannot authorize it', by: e.decidedBy } });
       if (e.decidedBy === run.createdBy && !ownerDecided) {
         await this.prisma.db.payrollRun.updateMany({ where: { id: run.id }, data: { status: 'CALCULATED' } });

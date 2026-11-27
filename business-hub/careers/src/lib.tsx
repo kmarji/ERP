@@ -1,7 +1,7 @@
 import { ThemeButton } from './theme';
 import { createContext, ReactNode, useContext, useEffect, useState } from 'react';
 
-const BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
+export const BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
 
 export async function api<T = any>(path: string, init: { method?: string; body?: unknown; form?: FormData } = {}): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {

@@ -1,5 +1,5 @@
 import { ownDutyRule } from '../audit/owner-override';
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import * as bcrypt from 'bcrypt';
 import { createHash, randomBytes } from 'node:crypto';
@@ -19,6 +19,9 @@ import { WF03 } from '../recruitment/recruitment.workflow';
 import { ApprovalDecidedEvent, APPROVAL_DECIDED, ApprovalService } from '../workflow-engine/approval.service';
 import { WorkflowEngineService } from '../workflow-engine/workflow-engine.service';
 import { buildContract } from './contract';
+import { fillTemplate } from './contract-template';
+import { PdfConverter } from './pdf';
+import { ContractTemplatesService } from './templates.service';
 
 export interface OfferInput {
   startDate: string;
@@ -28,12 +31,15 @@ export interface OfferInput {
   endDate?: string;
   probationMonths?: number;
   weeklyHours?: number;
+  templateId?: string;
 }
 
 const OFFER_ACTION = 'offer.approve';
 
 @Injectable()
 export class OnboardingService {
+  private readonly log = new Logger(OnboardingService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly policy: PolicyService,
@@ -46,6 +52,8 @@ export class OnboardingService {
     private readonly notifier: CandidateNotifier,
     private readonly notifications: NotificationsService,
     private readonly crypto: FieldCrypto,
+    private readonly templates: ContractTemplatesService,
+    private readonly pdf: PdfConverter,
   ) {}
 
   // Moves the WF-03 instance (when one exists) and keeps Application.status in step with it.
@@ -85,7 +93,10 @@ export class OnboardingService {
     if (decision.decision === 'BLOCKED') throw new BadRequestException('Offers are blocked by policy');
     const status = decision.decision === 'AUTO' ? 'APPROVED' : 'PENDING_APPROVAL';
 
-    const text = buildContract({
+    const contractType = input.contractType ?? 'OPEN';
+    // Numbered first: the contract prints the number. A failed conversion leaves a gap in the numbering, nothing else.
+    const number = await this.sequences.next('OFR', 'OFR');
+    const text = input.templateId ? null : buildContract({
       employer: { name: entity.name, taxNumber: entity.taxNumber },
       candidateName: app.candidate.name,
       position: { title: position.title, titleAr: position.titleAr },
@@ -98,8 +109,33 @@ export class OnboardingService {
       probationMonths: input.probationMonths ?? 3,
       weeklyHours: String(input.weeklyHours ?? 48),
     });
+    // Made before the offer is saved, so a template problem leaves no half-made offer.
+    let pdf: Buffer | null = null;
+    if (input.templateId) {
+      const filled = fillTemplate(await this.templates.forOffer(input.templateId, contractType), {
+        employee_name: app.candidate.name,
+        job_title: position.title,
+        job_title_ar: position.titleAr ?? position.title,
+        branch: branch.name,
+        employer_name: entity.name,
+        tax_number: entity.taxNumber ?? '',
+        start_date: input.startDate.slice(0, 10),
+        end_date: input.endDate?.slice(0, 10) ?? '',
+        contract_type: contractType === 'FIXED_TERM' ? 'Fixed term' : 'Open-ended',
+        basic_salary: basic.toFixed(3),
+        allowances: allowances.map((a) => `${a.name}: ${a.amount.toFixed(3)} JOD`).join('; '),
+        total_salary: monthly.toFixed(3),
+        probation_months: String(input.probationMonths ?? 3),
+        weekly_hours: String(input.weeklyHours ?? 48),
+        offer_number: number,
+        today: ammanToday().toISOString().slice(0, 10),
+      });
+      pdf = await this.pdf.convert(filled).catch((e) => {
+        this.log.error(`contract conversion failed: ${e.message}`);
+        throw new ServiceUnavailableException('The contract could not be turned into a PDF. Try again, or ask for the server to be checked.');
+      });
+    }
     const offer = await this.prisma.db.$transaction(async (tx) => {
-      const number = await this.sequences.next('OFR', 'OFR', tx);
       const o = await tx.offer.create({
         data: {
           tenantId: '',
@@ -115,14 +151,18 @@ export class OnboardingService {
           weeklyHours: input.weeklyHours ?? 48,
           probationMonths: input.probationMonths ?? 3,
           status,
-          contractText: text as any,
+          contractText: (text ?? undefined) as any,
+          templateId: input.templateId ?? null,
           createdBy: user.id,
         },
       });
       await this.audit.record({ action: 'offer.created', entityType: 'Offer', entityId: o.id, policyVersion: decision.policyVersion, after: { number, status, annual: annual.toString(), variancePct } }, tx);
       return o;
     });
-    const doc = await this.docs.upload({ originalname: `${offer.number}-contract.html`, mimetype: 'text/html', buffer: Buffer.from(text.en + '\n' + text.ar), size: 0 }, user, { subjectType: 'Offer', subjectId: offer.id }, { extract: false });
+    const file = pdf
+      ? { originalname: `${offer.number}-contract.pdf`, mimetype: 'application/pdf', buffer: pdf, size: pdf.length }
+      : { originalname: `${offer.number}-contract.html`, mimetype: 'text/html', buffer: Buffer.from(`${text!.en}\n${text!.ar}`), size: 0 };
+    const doc = await this.docs.upload(file, user, { subjectType: 'Offer', subjectId: offer.id }, { extract: false });
     await this.prisma.db.offer.updateMany({ where: { id: offer.id }, data: { contractDocId: doc.id } });
     if (status === 'PENDING_APPROVAL') {
       await this.approvals.request({ subjectType: 'Offer', subjectId: offer.id, action: OFFER_ACTION, approverRole: decision.approverRole!, amount: Number(annual), branchId: branch.id });
@@ -202,11 +242,25 @@ export class OnboardingService {
     return runWithTenant(row.tenantId, async () => fn(await this.loadApp(row.id)));
   }
 
+  async contractFile(id: string) {
+    const o = await this.offer(id);
+    if (!o.contractDocId) throw new NotFoundException('This offer has no contract file');
+    return this.docs.read(o.contractDocId);
+  }
+
+  candidateContract(token: string) {
+    return this.withToken(token, async (app) => {
+      const o = await this.prisma.db.offer.findFirst({ where: { applicationId: app.id, templateId: { not: null }, status: { in: ['SENT', 'ACCEPTED', 'DECLINED'] } } });
+      if (!o) throw new NotFoundException('No contract available');
+      return this.contractFile(o.id);
+    });
+  }
+
   candidateOffer(token: string) {
     return this.withToken(token, async (app) => {
       const o = await this.prisma.db.offer.findFirst({ where: { applicationId: app.id, status: { in: ['SENT', 'ACCEPTED', 'DECLINED'] } } });
       if (!o) throw new NotFoundException('No offer available');
-      return { number: o.number, status: o.status, startDate: o.startDate, salaryBasic: o.salaryBasic.toString(), allowances: o.allowances, contractText: o.contractText, signedAt: o.candidateSignedAt };
+      return { number: o.number, status: o.status, startDate: o.startDate, salaryBasic: o.salaryBasic.toString(), allowances: o.allowances, contractText: o.contractText, hasPdf: !!o.templateId, signedAt: o.candidateSignedAt };
     });
   }
 

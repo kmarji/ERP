@@ -1,22 +1,26 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { Button, Card, Empty, ErrorBox, Input, PageHeader, StatusBadge, Table } from '../components/ui';
-import { api } from '../lib/api';
+import { Button, Card, Empty, ErrorBox, Input, PageHeader, StatusBadge, Table, Tabs } from '../components/ui';
+import { api, download } from '../lib/api';
 import { formatDate, formatJOD } from '../lib/format';
 import { useI18n } from '../lib/i18n';
+import ContractTemplates from './ContractTemplates';
 
 export default function Onboarding() {
   const { lang } = useI18n();
   const qc = useQueryClient();
   const offers = useQuery({ queryKey: ['offers'], queryFn: () => api<any[]>('/offers') });
   const [sel, setSel] = useState<any>(null);
+  const [tab, setTab] = useState('Offers');
+  const contract = useMutation({ mutationFn: (o: any) => download(`/offers/${o.id}/contract`, `${o.number}-contract.${o.templateId ? 'pdf' : 'html'}`) });
   const refresh = () => qc.invalidateQueries({ queryKey: ['offers'] });
   const act = useMutation({ mutationFn: (x: { id: string; a: 'send' | 'withdraw' | 'countersign' }) => api(`/offers/${x.id}/${x.a}`, { method: 'POST' }), onSuccess: refresh });
   return (
     <div>
       <PageHeader title="Onboarding" subtitle="Offer, signature, documents and employee creation. The candidate enters personal details once." />
-      <ErrorBox error={offers.error ?? act.error} />
-      <div className="grid gap-6 lg:grid-cols-5">
+      <Tabs tabs={['Offers', 'Contract templates']} value={tab} onChange={setTab} />
+      <ErrorBox error={offers.error ?? act.error ?? contract.error} />
+      {tab === 'Contract templates' ? <ContractTemplates /> : <div className="grid gap-6 lg:grid-cols-5">
         <Card title="Offers" className="lg:col-span-3">
           {offers.data?.length === 0 ? <Empty>No offers yet.</Empty> : (
             <Table head={['No.', 'Salary', 'Start', 'Status', 'Signed', '']}>
@@ -28,6 +32,7 @@ export default function Onboarding() {
                   <td className="px-3 py-2"><StatusBadge status={o.status} /></td>
                   <td className="px-3 py-2 text-xs">{o.candidateSignedAt ? 'candidate' : '-'} / {o.countersignedAt ? 'employer' : '-'}</td>
                   <td className="space-x-1 px-3 py-2 text-end">
+                    {o.contractDocId && <Button variant="ghost" onClick={() => contract.mutate(o)}>Contract</Button>}
                     {o.status === 'APPROVED' && <Button variant="ghost" onClick={() => act.mutate({ id: o.id, a: 'send' })}>Send</Button>}
                     {o.status === 'ACCEPTED' && !o.countersignedAt && <Button variant="ghost" onClick={() => act.mutate({ id: o.id, a: 'countersign' })}>Countersign</Button>}
                     {['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'SENT'].includes(o.status) && <Button variant="ghost" onClick={() => act.mutate({ id: o.id, a: 'withdraw' })}>Withdraw</Button>}
@@ -36,10 +41,10 @@ export default function Onboarding() {
               ))}
             </Table>
           )}
-          <p className="mt-2 text-xs text-slate-500">The employer countersignature must come from someone other than the person who made the offer.</p>
+          <p className="mt-2 text-xs text-slate-500">The employer countersignature must come from someone other than the person who made the offer, unless the owner signs.</p>
         </Card>
         <div className="lg:col-span-2">{sel ? <Checklist offer={sel} onDone={refresh} /> : <Card><Empty>Select an offer to see its onboarding checklist.</Empty></Card>}</div>
-      </div>
+      </div>}
     </div>
   );
 }

@@ -14,6 +14,8 @@ FROM node:22-alpine
 WORKDIR /app
 ENV NODE_ENV=production
 RUN apk add --no-cache openssl
+# Contract templates are turned into PDF by LibreOffice. Carlito and Liberation stand in for Calibri, Arial and Times.
+RUN apk add --no-cache libreoffice-writer font-liberation font-carlito font-dejavu font-noto-arabic
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY prisma ./prisma

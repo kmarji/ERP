@@ -5,6 +5,7 @@ import { Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Select,
 import { api } from '../lib/api';
 import { formatDate } from '../lib/format';
 import { nameOf, useList } from '../lib/lookups';
+import { useTemplates } from './ContractTemplates';
 
 const CRITERIA = ['MIN_EXPERIENCE_YEARS', 'REQUIRED_SKILL', 'ANY_SKILL', 'LANGUAGE', 'WEEKEND_AVAILABILITY', 'NIGHT_AVAILABILITY', 'CERTIFICATION', 'LEGAL_WORK_ELIGIBILITY'];
 const NO_VALUE = ['WEEKEND_AVAILABILITY', 'NIGHT_AVAILABILITY', 'LEGAL_WORK_ELIGIBILITY'];
@@ -327,12 +328,16 @@ function ApplicationDetail({ id }: { id: string }) {
   const [reason, setReason] = useState('');
   const [note, setNote] = useState('');
   const [tx, setTx] = useState<any>(null);
-  const [offer, setOffer] = useState({ startDate: '', salaryBasic: '', allowName: '', allowAmount: '', contractType: 'OPEN', probationMonths: '3', weeklyHours: '48' });
+  const [offer, setOffer] = useState({ startDate: '', salaryBasic: '', allowName: '', allowAmount: '', contractType: 'OPEN', probationMonths: '3', weeklyHours: '48', templateId: null as string | null });
+  const templates = useTemplates();
+  const usable = (templates.data ?? []).filter((x) => x.active && (!x.contractType || x.contractType === offer.contractType));
+  // Until chosen by hand, the only matching template is used; '' means the built-in text.
+  const templateId = offer.templateId !== null && (offer.templateId === '' || usable.some((x) => x.id === offer.templateId)) ? offer.templateId : usable.length === 1 ? usable[0].id : '';
   const refresh = () => { qc.invalidateQueries({ queryKey: ['app', id] }); qc.invalidateQueries({ queryKey: ['apps'] }); };
   const decide = useMutation({ mutationFn: (action: string) => api(`/recruitment/applications/${id}/decision`, { body: { action, reason: reason || undefined, note: note || undefined } }), onSuccess: refresh });
   const transcript = useMutation({ mutationFn: (iid: string) => api(`/recruitment/interviews/${iid}/transcript`), onSuccess: setTx });
   const makeOffer = useMutation({
-    mutationFn: () => api(`/applications/${id}/offer`, { body: { startDate: offer.startDate, salaryBasic: Number(offer.salaryBasic), contractType: offer.contractType, probationMonths: Number(offer.probationMonths), weeklyHours: Number(offer.weeklyHours), allowances: offer.allowName ? [{ name: offer.allowName, amount: Number(offer.allowAmount || 0) }] : [] } }),
+    mutationFn: () => api(`/applications/${id}/offer`, { body: { startDate: offer.startDate, templateId: templateId || undefined, salaryBasic: Number(offer.salaryBasic), contractType: offer.contractType, probationMonths: Number(offer.probationMonths), weeklyHours: Number(offer.weeklyHours), allowances: offer.allowName ? [{ name: offer.allowName, amount: Number(offer.allowAmount || 0) }] : [] } }),
     onSuccess: refresh,
   });
   const a = app.data;
@@ -419,6 +424,7 @@ function ApplicationDetail({ id }: { id: string }) {
             <Field label="Allowance amount"><Input type="number" step="0.001" value={offer.allowAmount} onChange={(e) => setOffer({ ...offer, allowAmount: e.target.value })} /></Field>
             <Field label="Probation (months)"><Input type="number" value={offer.probationMonths} onChange={(e) => setOffer({ ...offer, probationMonths: e.target.value })} /></Field>
             <Field label="Weekly hours"><Input type="number" value={offer.weeklyHours} onChange={(e) => setOffer({ ...offer, weeklyHours: e.target.value })} /></Field>
+            <Field label="Contract template"><Select value={templateId} onChange={(e) => setOffer({ ...offer, templateId: e.target.value })}><option value="">Built-in text</option>{usable.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</Select></Field>
             <div className="flex items-end"><Button type="submit">Create offer</Button></div>
           </form>
           <p className="mt-2 text-xs text-slate-500">Above the pay band or policy limits, the offer waits for approval (see Approvals).</p>
