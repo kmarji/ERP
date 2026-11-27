@@ -1,3 +1,4 @@
+import { DocumentsService } from '../documents/documents.module';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { Cron } from '@nestjs/schedule';
@@ -26,7 +27,7 @@ export class LeaveService {
     private readonly policy: PolicyService,
     private readonly approvals: ApprovalService,
     private readonly exceptions: ExceptionService,
-    private readonly audit: AuditService,
+    private readonly audit: AuditService, private readonly docs: DocumentsService
   ) {}
 
   // PLACEHOLDER defaults until HR sets the real entitlements (see payroll rules, which need legal verification).
@@ -94,6 +95,7 @@ export class LeaveService {
     if (input.employeeId && me.userId !== user.id) assertBranchAccess(user, (await primaryBranch(this.prisma, me.id, new Date())) ?? '', MANAGERS);
     const type = (await this.types()).find((t) => t.id === input.leaveTypeId);
     if (!type) throw new NotFoundException('Leave type not found');
+    await this.docs.assertAttachable(user, [input.certificateDocId]);
     const start = utc(input.startDate), end = utc(input.endDate);
     if (end < start) throw new BadRequestException('endDate is before startDate');
     if (start.getUTCFullYear() !== end.getUTCFullYear()) throw new BadRequestException('Split requests that cross a year');

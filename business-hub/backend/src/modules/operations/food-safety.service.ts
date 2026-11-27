@@ -1,3 +1,4 @@
+import { DocumentsService } from '../documents/documents.module';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { d } from '../../common/money';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -32,7 +33,7 @@ const OPEN = ['OPEN', 'IN_PROGRESS', 'PENDING_VERIFICATION'];
 // A58: measurements against thresholds; a breach raises an exception and one corrective action per point until it is closed.
 @Injectable()
 export class FoodSafetyService {
-  constructor(private readonly prisma: PrismaService, private readonly audit: AuditService, private readonly actions: ActionsService, private readonly exceptions: ExceptionService, private readonly settings: OpsSettings) {}
+  constructor(private readonly prisma: PrismaService, private readonly audit: AuditService, private readonly actions: ActionsService, private readonly exceptions: ExceptionService, private readonly settings: OpsSettings, private readonly docs: DocumentsService) {}
 
   // Adds today's due-but-unrecorded slots to each scheduled point.
   private async withDue<T extends { id: string; readingTimes: string[] }>(points: T[]) {
@@ -76,7 +77,7 @@ export class FoodSafetyService {
     if (!p || !p.active) throw new NotFoundException('Measurement point not found');
     if (as === 'manager') assertBranchAccess(user, p.branchId, MANAGERS);
     else if (!(await this.myPoints(user)).some((x) => x.id === p.id)) throw new ForbiddenException('This point is not at your branch');
-    if (input.docId && !(await this.prisma.db.evidenceDocument.findFirst({ where: { id: input.docId } }))) throw new BadRequestException('Unknown evidence document');
+    await this.docs.assertAttachable(user, [input.docId]);
     const v = d(input.value);
     const inRange = (p.minValue == null || v.gte(p.minValue)) && (p.maxValue == null || v.lte(p.maxValue));
     let actionId: string | null = null;

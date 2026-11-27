@@ -1,3 +1,4 @@
+import { DocumentsService } from '../documents/documents.module';
 import { ownDutyRule } from '../audit/owner-override';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
@@ -24,7 +25,7 @@ export class ActionsService {
     private readonly seq: SequenceService,
     private readonly audit: AuditService,
     private readonly exceptions: ExceptionService,
-    private readonly notes: NotificationsService,
+    private readonly notes: NotificationsService, private readonly docs: DocumentsService
   ) {}
 
   async create(input: { branchId: string; source: 'AUDIT' | 'FOOD_SAFETY' | 'MANUAL'; sourceId?: string; title: string; description?: string; severity: string; dueAt?: Date }, by: string, tx: Tx = this.prisma.db) {
@@ -82,7 +83,7 @@ export class ActionsService {
     if (a.assigneeEmployeeId !== me.id) throw new ForbiddenException('This action is not assigned to you');
     if (a.status !== 'IN_PROGRESS') throw new ConflictException(`Action is ${a.status}`);
     if (!input.docIds.length) throw new BadRequestException('Attach evidence of the fix');
-    if ((await this.prisma.db.evidenceDocument.count({ where: { id: { in: input.docIds } } })) !== new Set(input.docIds).size) throw new BadRequestException('Unknown evidence document');
+    await this.docs.assertAttachable(user, input.docIds);
     return this.move(a, ['IN_PROGRESS'], { status: 'PENDING_VERIFICATION', completionNote: input.note, evidenceDocIds: input.docIds, completedAt: new Date() }, note(user.id, 'completed', input.note), 'corrective_action.completed');
   }
 

@@ -9,7 +9,7 @@ describe('M9a operations: checklists', () => {
   let http: Http;
   let prisma: PrismaService;
   let T: Awaited<ReturnType<typeof newTenant>>;
-  let branchId: string, mgr: { token: string }, otherMgr: { token: string }, ana: { token: string; empId: string }, bob: { token: string; empId: string };
+  let branchId: string, mgr: { token: string }, otherMgr: { token: string }, ana: { id: string; token: string; empId: string }, bob: { id: string; token: string; empId: string };
   const post = (path: string, token: string, body: object = {}) => http.post(path).set(auth(token)).send(body);
   const get = (path: string, token: string) => http.get(path).set(auth(token));
   const sweep = (at?: Date) => runWithTenant(T.tenantId, () => app.get(ChecklistsService).sweep(at));
@@ -73,7 +73,7 @@ describe('M9a operations: checklists', () => {
     const [fridge, photo, floor] = template.items;
     await post(`/me/checklists/${run.id}/submit`, bob.token, { answers: [{ itemId: fridge.id, ok: false }] }).expect(400); // incomplete
     await post(`/me/checklists/${run.id}/submit`, bob.token, { answers: [{ itemId: fridge.id, ok: false }, { itemId: photo.id, ok: true }, { itemId: floor.id, ok: true }] }).expect(400); // evidence missing
-    const doc = await prisma.raw.evidenceDocument.create({ data: { tenantId: T.tenantId, storageKey: 'k', filename: 'p.jpg', mimeType: 'image/jpeg', sizeBytes: 1, sha256: 'x' } });
+    const doc = await prisma.raw.evidenceDocument.create({ data: { tenantId: T.tenantId, createdBy: bob.id, storageKey: 'k', filename: 'p.jpg', mimeType: 'image/jpeg', sizeBytes: 1, sha256: 'x' } });
     const answers = [{ itemId: fridge.id, ok: false, note: '9C' }, { itemId: photo.id, ok: true, docId: doc.id }, { itemId: floor.id, ok: true }];
     const done = (await post(`/me/checklists/${run.id}/submit`, bob.token, { answers, completedAt: new Date().toISOString() }).expect(201)).body;
     expect(done).toMatchObject({ status: 'COMPLETED', criticalFailures: 1 });

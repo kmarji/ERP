@@ -1,3 +1,4 @@
+import { DocumentsService } from '../documents/documents.module';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -17,7 +18,7 @@ const DAY = 86_400_000;
 
 @Injectable()
 export class AuditsService {
-  constructor(private readonly prisma: PrismaService, private readonly audit: AuditService, private readonly actions: ActionsService, private readonly exceptions: ExceptionService, private readonly settings: OpsSettings) {}
+  constructor(private readonly prisma: PrismaService, private readonly audit: AuditService, private readonly actions: ActionsService, private readonly exceptions: ExceptionService, private readonly settings: OpsSettings, private readonly docs: DocumentsService) {}
 
   // ---------------------------------------------------------------- A56 templates
 
@@ -91,8 +92,8 @@ export class AuditsService {
       if (!a) throw new BadRequestException(`Answer every item: "${i.label}" is missing`);
       if (a.result === 'FAIL' && !a.note?.trim()) throw new BadRequestException(`Say what was wrong: "${i.label}"`);
       if (a.result !== 'NA' && i.evidenceRequired && !a.docId) throw new BadRequestException(`"${i.label}" needs evidence`);
-      if (a.docId && !(await this.prisma.db.evidenceDocument.findFirst({ where: { id: a.docId } }))) throw new BadRequestException('Unknown evidence document');
     }
+    await this.docs.assertAttachable(user, answers.map((a) => a.docId));
     const applicable = items.filter((i) => by.get(i.id)!.result !== 'NA');
     const total = applicable.reduce((s, i) => s + i.weight, 0);
     const got = applicable.filter((i) => by.get(i.id)!.result === 'PASS').reduce((s, i) => s + i.weight, 0);

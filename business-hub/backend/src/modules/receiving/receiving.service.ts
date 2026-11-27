@@ -120,6 +120,7 @@ export class ReceivingService implements OnModuleInit {
     const branch = await this.prisma.db.branch.findFirstOrThrow({ where: { id: input.branchId } });
 
     // ---- invoice draft: extracted fields first, human-entered fields override
+    await this.docs.assertAttachable(user, [input.evidenceDocumentId]);
     const doc = input.evidenceDocumentId ? await this.docs.get(input.evidenceDocumentId) : null;
     const ex: any = doc?.extracted ?? {};
     const exField = (k: string) => ex.fields?.[k]?.value ?? null;

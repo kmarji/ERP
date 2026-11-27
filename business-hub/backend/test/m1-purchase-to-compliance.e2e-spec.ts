@@ -21,8 +21,8 @@ describe('M1 Purchase-to-Compliance (AT-01, AT-02)', () => {
 
   const get = async (path: string, token = T.token) => (await http.get(path).set(auth(token)).expect(200)).body;
 
-  async function upload(fixture: object) {
-    const r = await http.post('/documents').set(auth(T.token)).attach('file', Buffer.from(JSON.stringify(fixture)), { filename: 'inv.json', contentType: 'application/json' }).expect(201);
+  async function upload(fixture: object, token = proc1.token) { // the receiver uploads, as on the Receiving screen
+    const r = await http.post('/documents').set(auth(token)).attach('file', Buffer.from(JSON.stringify(fixture)), { filename: 'inv.json', contentType: 'application/json' }).expect(201);
     return r.body.id as string;
   }
 
@@ -45,7 +45,7 @@ describe('M1 Purchase-to-Compliance (AT-01, AT-02)', () => {
   };
 
   async function receive(po: any, fixture: object, qty: number, token = proc1.token, key = randomUUID()) {
-    const doc = await upload(fixture);
+    const doc = await upload(fixture, token);
     const res = await http.post('/receiving').set(auth(token)).send({ idempotencyKey: key, purchaseOrderId: po.id, branchId, stockLocationId: locationId, evidenceDocumentId: doc, receivedLines: [{ poLineId: po.lines[0].id, qty }] }).expect(201);
     return { ...res.body, key, doc };
   }

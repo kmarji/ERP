@@ -8,7 +8,6 @@ import {
   NotFoundException,
   Param,
   Post,
-  Query,
   Res,
   UploadedFile,
   UseInterceptors,
@@ -22,6 +21,7 @@ import { currentTenantId, RequestUser } from '../../common/tenancy/tenant-contex
 import { AuditService } from '../audit/audit.service';
 import { CurrentUser } from '../auth/auth.decorators';
 import { requireStub } from '../integrations/adapter-mode';
+import { canReadDocument } from './document-access';
 import { DocumentProcessingAdapter, LocalDiskStorage, StorageAdapter, StubDocumentProcessing } from './documents.adapters';
 
 // Training videos are large; override with MAX_UPLOAD_MB. Files are buffered in memory, so very large limits need more RAM.
@@ -78,6 +78,27 @@ export class DocumentsService {
     return { doc, data: await this.storage.get(doc.storageKey) };
   }
 
+  // get/read above are for server code with its own guard. Anything a user asks for by ID goes through these.
+  async readable(user: RequestUser, id: string) {
+    const doc = await this.get(id);
+    if (!(await canReadDocument(this.prisma, user, doc))) throw new NotFoundException('Document not found');
+    return doc;
+  }
+
+  // Nobody may link a file they cannot open to a record: that would be a way to gain access to it.
+  async assertAttachable(user: RequestUser, ids: (string | null | undefined)[]) {
+    for (const id of new Set(ids.filter((x): x is string => !!x))) {
+      const doc = await this.prisma.db.evidenceDocument.findFirst({ where: { id } });
+      if (!doc || !(await canReadDocument(this.prisma, user, doc))) throw new BadRequestException('Unknown evidence document');
+    }
+  }
+
+  async readableForSubject(user: RequestUser, subjectType: string, subjectId: string) {
+    const rows = await this.forSubject(subjectType, subjectId);
+    const allowed = await Promise.all(rows.map((d) => canReadDocument(this.prisma, user, d)));
+    return rows.filter((_, i) => allowed[i]);
+  }
+
   forSubject(subjectType: string, subjectId: string) {
     return this.prisma.db.evidenceDocument.findMany({ where: { subjectType, subjectId }, orderBy: { createdAt: 'asc' } });
   }
@@ -92,26 +113,23 @@ class DocumentsController {
   @Post()
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_BYTES } }))
-  upload(
-    @UploadedFile() file: Express.Multer.File,
-    @CurrentUser() user: RequestUser,
-    @Query('subjectType') subjectType?: string,
-    @Query('subjectId') subjectId?: string,
-  ) {
+  upload(@UploadedFile() file: Express.Multer.File, @CurrentUser() user: RequestUser) {
     if (!file) throw new BadRequestException('file is required');
-    return this.docs.upload(file, user, { subjectType, subjectId });
+    // No record label from the caller: the label decides who may open the file, so only the server sets it.
+    return this.docs.upload(file, user);
   }
 
-  @Get('by-subject/:type/:id') bySubject(@Param('type') type: string, @Param('id') id: string) {
-    return this.docs.forSubject(type, id);
+  @Get('by-subject/:type/:id') bySubject(@Param('type') type: string, @Param('id') id: string, @CurrentUser() user: RequestUser) {
+    return this.docs.readableForSubject(user, type, id);
   }
 
-  @Get(':id') get(@Param('id') id: string) {
-    return this.docs.get(id);
+  @Get(':id') get(@Param('id') id: string, @CurrentUser() user: RequestUser) {
+    return this.docs.readable(user, id);
   }
 
   @Get(':id/download')
-  async download(@Param('id') id: string, @Res() res: any) {
+  async download(@Param('id') id: string, @CurrentUser() user: RequestUser, @Res() res: any) {
+    await this.docs.readable(user, id);
     const { doc, data } = await this.docs.read(id);
     res.setHeader('Content-Type', doc.mimeType);
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(doc.filename)}"`);

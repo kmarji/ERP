@@ -39,6 +39,7 @@
     "@nestjs/swagger": "^7.2.0",
     "@nestjs/throttler": "^5.1.0",
     "@prisma/client": "^5.7.0",
+    "@xmldom/xmldom": "^0.9.12",
     "bcrypt": "^6.0.0",
     "bullmq": "^5.81.5",
     "class-transformer": "^0.5.1",

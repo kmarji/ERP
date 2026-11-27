@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import Docxtemplater from 'docxtemplater';
 import PizZip from 'pizzip';
+import { checkSafety } from './template-safety';
 
 export const MARKERS = [
   'employee_name', 'employee_name_ar', 'nationality', 'job_title', 'job_title_ar', 'branch', 'employer_name', 'tax_number',
@@ -34,18 +35,13 @@ function open(file: Buffer) {
 // Refuses a template that is unreadable, uses unknown markers, or would make the server fetch something when converting.
 export function checkTemplate(file: Buffer): void {
   const { zip, found } = open(file);
-  const parts = (end: string) => Object.keys(zip.files).filter((n) => n.endsWith(end)).map((n) => zip.file(n)!.asText());
-  const linked = parts('.rels')
-    .flatMap((x) => x.match(/<(?:\w+:)?Relationship\b[^>]*>/g) ?? [])
-    .some((r) => /TargetMode\s*=\s*["']External["']/.test(r) && !/Type\s*=\s*["'][^"']*\/hyperlink["']/.test(r));
-  // ponytail: catches field codes written whole; one split across runs would pass. Only HR and the owner can upload.
-  const outside = linked || parts('.xml').some((x) => /(INCLUDEPICTURE|INCLUDETEXT|DDEAUTO)\b/.test(x));
-  if (outside) throw new BadRequestException('The template links to content outside the file (for example a linked picture). Embed it in the document and upload again.');
+  checkSafety(zip);
   const unknown = [...found].filter((m) => !(MARKERS as readonly string[]).includes(m));
   if (unknown.length) throw new BadRequestException(`Unknown marker(s): ${unknown.join(', ')}`);
 }
 
 export function fillTemplate(file: Buffer, values: MarkerValues): Buffer {
+  checkTemplate(file); // also covers templates uploaded under earlier rules
   const { doc } = open(file);
   doc.render(values);
   return doc.getZip().generate({ type: 'nodebuffer', compression: 'DEFLATE' });

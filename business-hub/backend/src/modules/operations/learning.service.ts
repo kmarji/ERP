@@ -42,7 +42,7 @@ export class LearningService {
     const code = input.code ?? randomUUID().slice(0, 8);
     const last = await this.prisma.db.libraryItem.findFirst({ where: { code }, orderBy: { version: 'desc' } });
     if (input.code && !last) throw new NotFoundException('Unknown item code');
-    const attachments = input.attachmentIds ? await attachmentSnapshot(this.prisma, input.attachmentIds) : ((last?.attachments as unknown as Attachment[]) ?? []);
+    const attachments = input.attachmentIds ? await attachmentSnapshot(this.prisma, this.docs, user, input.attachmentIds) : ((last?.attachments as unknown as Attachment[]) ?? []);
     if (input.body.trim().length < 10 && !attachments.length) throw new BadRequestException('Write the material (at least 10 characters) or attach a file');
     const row = await this.prisma.db.$transaction(async (tx) => {
       if (last) await tx.libraryItem.updateMany({ where: { code }, data: { active: false } });

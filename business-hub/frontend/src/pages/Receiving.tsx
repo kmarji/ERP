@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChangeEvent, FormEvent, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Select, StatusBadge, Table, TierBadge } from '../components/ui';
-import { api, newKey, upload } from '../lib/api';
+import { api, newKey, upload, download } from '../lib/api';
 import { formatDate, formatJOD } from '../lib/format';
 import { useI18n } from '../lib/i18n';
 
@@ -44,7 +44,7 @@ function Detail({ id, onChanged }: { id: string; onChanged: () => void }) {
       </div>
       {t.invoice && <p>Invoice <b>{t.invoice.invoiceNumber}</b> dated {formatDate(t.invoice.invoiceDate)}: total {formatJOD(t.invoice.total, lang)} (tax {formatJOD(t.invoice.taxTotal, lang)}){t.invoice.extractionConfidence && ` - confidence ${Number(t.invoice.extractionConfidence) * 100}%`}</p>}
       {t.purchaseOrder && <p>PO <b>{t.purchaseOrder.number}</b> <StatusBadge status={t.purchaseOrder.status} /></p>}
-      {t.document && <p>Evidence: {t.document.filename} <a className="text-brand-600 hover:underline" href={`${import.meta.env.VITE_API_URL ?? 'http://localhost:3000'}/documents/${t.document.id}/download`} target="_blank" rel="noreferrer">(sha {t.document.sha256.slice(0, 10)})</a></p>}
+      {t.document && <p>Evidence: {t.document.filename} <button type="button" className="text-brand-600 hover:underline" onClick={() => download(`/documents/${t.document.id}/download`, t.document.filename).catch((e) => alert(e.message))}>(sha {t.document.sha256.slice(0, 10)})</button></p>}
       <div><div className="text-xs font-semibold uppercase text-slate-500">Findings</div><Findings findings={t.findings} /></div>
       {t.exceptions?.length > 0 && <div className="text-xs text-slate-500">Exceptions: {t.exceptions.map((e: any) => <span key={e.id} className="me-2"><TierBadge tier={e.riskTier} /> {e.code} ({e.ownerRole}, {e.status}) </span>)} <Link className="text-brand-600 hover:underline" to="/exceptions">open</Link></div>}
       {t.movements.length > 0 && <div><div className="text-xs font-semibold uppercase text-slate-500">Stock movements</div>{t.movements.map((m: any) => <div key={m.id}>{m.type} {Number(m.qtyBase)} @ {Number(m.unitCost)} = {formatJOD(m.valueDelta, lang)}</div>)}</div>}

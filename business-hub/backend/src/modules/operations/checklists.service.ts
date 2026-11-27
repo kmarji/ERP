@@ -1,3 +1,4 @@
+import { DocumentsService } from '../documents/documents.module';
 import { Attachment, attachmentSnapshot } from './attachments';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
@@ -21,7 +22,7 @@ const localDate = (d: Date) => new Date(d.getTime() + AMMAN).toISOString().slice
 export class ChecklistsService {
   private readonly log = new Logger(ChecklistsService.name);
 
-  constructor(private readonly prisma: PrismaService, private readonly audit: AuditService, private readonly exceptions: ExceptionService, private readonly notes: NotificationsService) {}
+  constructor(private readonly prisma: PrismaService, private readonly audit: AuditService, private readonly exceptions: ExceptionService, private readonly notes: NotificationsService, private readonly docs: DocumentsService) {}
 
   // ---------------------------------------------------------------- A48 templates
 
@@ -45,7 +46,7 @@ export class ChecklistsService {
     const code = input.code ?? randomUUID().slice(0, 8);
     const last = await this.prisma.db.checklistTemplate.findFirst({ where: { code }, orderBy: { version: 'desc' } });
     if (input.code && !last) throw new NotFoundException('Unknown template code');
-    const attachments = input.attachmentIds ? await attachmentSnapshot(this.prisma, input.attachmentIds) : ((last?.attachments as unknown as Attachment[]) ?? []);
+    const attachments = input.attachmentIds ? await attachmentSnapshot(this.prisma, this.docs, user, input.attachmentIds) : ((last?.attachments as unknown as Attachment[]) ?? []);
     const row = await this.prisma.db.$transaction(async (tx) => {
       if (last) await tx.checklistTemplate.updateMany({ where: { code }, data: { active: false } });
       return tx.checklistTemplate.create({ data: { tenantId: currentTenantId(), code, version: (last?.version ?? 0) + 1, name: input.name, branchId: scope, items: items as any, attachments: attachments as any, createdBy: user.id } });
@@ -173,7 +174,7 @@ export class ChecklistsService {
       if (it.evidenceRequired && !a.docId) throw new BadRequestException(`"${it.label}" needs evidence`);
     }
     if (answers.some((a) => !items.some((i) => i.id === a.itemId))) throw new BadRequestException('Unknown item in answers');
-    for (const a of answers) if (a.docId && !(await this.prisma.db.evidenceDocument.findFirst({ where: { id: a.docId } }))) throw new BadRequestException('Unknown evidence document');
+    await this.docs.assertAttachable(user, answers.map((a) => a.docId));
     const failures = items.filter((i) => i.critical && !byId.get(i.id)!.ok);
     const now = new Date();
     // An offline device reports when the work was done. It counts for lateness only if it is plausible (after the run existed, not in the future).

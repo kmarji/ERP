@@ -10,11 +10,11 @@ describe('M9c operations: audits, food safety, corrective actions', () => {
   let prisma: PrismaService;
   let T: Awaited<ReturnType<typeof newTenant>>;
   let branchId: string, otherBranch: string;
-  let mgr: { token: string }, mgrB: { token: string }, otherMgr: { token: string }, hr: { token: string };
-  let ana: { token: string; empId: string }, zed: { token: string; empId: string };
+  let mgr: { id: string; token: string }, mgrB: { token: string }, otherMgr: { token: string }, hr: { token: string };
+  let ana: { id: string; token: string; empId: string }, zed: { id: string; token: string; empId: string };
   const post = (path: string, token: string, body: object = {}) => http.post(path).set(auth(token)).send(body);
   const get = (path: string, token: string) => http.get(path).set(auth(token));
-  const doc = () => prisma.raw.evidenceDocument.create({ data: { tenantId: T.tenantId, storageKey: `k${Math.random()}`, filename: 'p.jpg', mimeType: 'image/jpeg', sizeBytes: 1, sha256: `x${Math.random()}` } });
+  const doc = (by: { id: string }) => prisma.raw.evidenceDocument.create({ data: { tenantId: T.tenantId, createdBy: by.id, storageKey: `k${Math.random()}`, filename: 'p.jpg', mimeType: 'image/jpeg', sizeBytes: 1, sha256: `x${Math.random()}` } });
 
   async function employee(key: string, branch: string) {
     const u = await makeUser(http, T, key, 'EMPLOYEE', branch);
@@ -63,7 +63,7 @@ describe('M9c operations: audits, food safety, corrective actions', () => {
     await post(`/ops/audits/${audit.id}/complete`, mgr.token, { answers: [{ itemId: wash.id, result: 'PASS' }] }).expect(400); // incomplete
     await post(`/ops/audits/${audit.id}/complete`, mgr.token, { answers: [{ itemId: wash.id, result: 'FAIL' }, { itemId: floor.id, result: 'PASS' }, { itemId: pest.id, result: 'NA' }] }).expect(400); // fail needs a note
     await post(`/ops/audits/${audit.id}/complete`, mgr.token, { answers: [{ itemId: wash.id, result: 'PASS' }, { itemId: floor.id, result: 'PASS' }, { itemId: pest.id, result: 'PASS' }] }).expect(400); // evidence missing
-    const d = await doc();
+    const d = await doc(mgr);
     const done = (await post(`/ops/audits/${audit.id}/complete`, mgr.token, { answers: [{ itemId: wash.id, result: 'FAIL', note: 'No soap' }, { itemId: floor.id, result: 'PASS' }, { itemId: pest.id, result: 'PASS', docId: d.id }] }).expect(201)).body;
     expect(done).toMatchObject({ status: 'COMPLETED', scorePct: 50, passed: false, criticalFails: 1 }); // (1+1)/(2+1+1)
     expect(done.results.find((r: any) => r.itemId === wash.id).actionId).toBeTruthy();
@@ -81,7 +81,7 @@ describe('M9c operations: audits, food safety, corrective actions', () => {
     expect((await post(`/ops/actions/${act.id}/assign`, mgr.token, { employeeId: ana.empId }).expect(201)).body.status).toBe('IN_PROGRESS');
     await post(`/me/actions/${act.id}/complete`, zed.token, { note: 'done', docIds: [] }).expect(403); // not theirs
     await post(`/me/actions/${act.id}/complete`, ana.token, { note: 'Soap installed', docIds: [] }).expect(400); // no evidence
-    const d = await doc();
+    const d = await doc(ana);
     expect((await post(`/me/actions/${act.id}/complete`, ana.token, { note: 'Soap installed', docIds: [d.id] }).expect(201)).body.status).toBe('PENDING_VERIFICATION');
     await post(`/ops/actions/${act.id}/cancel`, mgr.token, { reason: 'not needed' }).expect(403); // audit finding: company-wide role only
     await post(`/ops/actions/${act.id}/verify`, mgr.token, { approve: true }).expect(403); // CRITICAL: company-wide role only
@@ -110,7 +110,7 @@ describe('M9c operations: audits, food safety, corrective actions', () => {
     const act = await prisma.raw.correctiveAction.findFirstOrThrow({ where: { tenantId: T.tenantId, source: 'FOOD_SAFETY' } });
     expect((act.history as any[]).map((h) => h.event)).toEqual(['created', 'repeat_breach']);
     await post(`/ops/actions/${act.id}/assign`, mgr.token, { employeeId: ana.empId }).expect(201);
-    const d = await doc();
+    const d = await doc(ana);
     await post(`/me/actions/${act.id}/complete`, ana.token, { note: 'Fridge serviced', docIds: [d.id] }).expect(201);
     await post(`/ops/actions/${act.id}/verify`, mgr.token, { approve: true }).expect(409); // no good reading yet
     await post('/me/food-safety/readings', ana.token, { pointId: point.id, value: 4 }).expect(201);

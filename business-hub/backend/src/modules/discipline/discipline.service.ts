@@ -1,3 +1,4 @@
+import { DocumentsService } from '../documents/documents.module';
 import { ownDutyRule } from '../audit/owner-override';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { d, money } from '../../common/money';
@@ -17,7 +18,7 @@ const DEFAULT_CATEGORIES = [['ATTENDANCE', 'Attendance'], ['CONDUCT', 'Conduct']
 
 @Injectable()
 export class DisciplineService {
-  constructor(private readonly prisma: PrismaService, private readonly seq: SequenceService, private readonly audit: AuditService) {}
+  constructor(private readonly prisma: PrismaService, private readonly seq: SequenceService, private readonly audit: AuditService, private readonly docs: DocumentsService) {}
 
   // First use per company creates the four defaults; after that the company owns the list.
   async categories(includeInactive = false) {
@@ -98,6 +99,7 @@ export class DisciplineService {
     const now = new Date();
     const branches = (await this.prisma.db.employeeAssignment.findMany({ where: { employeeId: emp.id, validFrom: { lte: now }, OR: [{ validTo: null }, { validTo: { gte: now } }] } })).map((a) => a.branchId);
     if (!branches.some((b) => { try { assertBranchAccess(user, b, MANAGERS); return true; } catch { return false; } })) throw new ForbiddenException('Employee is outside your branch');
+    await this.docs.assertAttachable(user, input.evidenceDocIds ?? []);
     const row = await this.prisma.db.disciplinaryCase.create({
       data: { tenantId: '', number: await this.seq.next('discipline', 'DC'), employeeId: emp.id, category: input.category, description: input.description, incidentDate: new Date(input.incidentDate), evidenceDocIds: input.evidenceDocIds ?? [], reportedBy: user.id },
     });
