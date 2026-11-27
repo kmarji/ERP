@@ -111,6 +111,30 @@ describe('M18 only authorised people open documents', () => {
     expect(await list(other)).toEqual([]);
   });
 
+  it('a role limited to one legal entity opens only that entity’s files', async () => {
+    const second = (await prisma.raw.legalEntity.create({ data: { tenantId: t(), name: 'Second Co' } })).id;
+    const limited = async (key: string, roleKey: string, legalEntityId: string) => {
+      const u = await makeUser(http, T, key, 'EMPLOYEE');
+      const role = await prisma.raw.role.findFirstOrThrow({ where: { tenantId: t(), key: roleKey } });
+      await prisma.raw.userRole.create({ data: { tenantId: t(), userId: u.id, roleId: role.id, legalEntityId } });
+      return u;
+    };
+    const slip = await upload({ id: T.ownerId, token: T.token });
+    const bank = await upload({ id: T.ownerId, token: T.token });
+    const run = await prisma.raw.payrollRun.create({ data: { tenantId: t(), number: 'PR2', legalEntityId: T.legalEntityId, periodStart: new Date('2026-02-01'), periodEnd: new Date('2026-02-28'), ruleSetId: 'x', ruleVersion: 1, createdBy: T.ownerId, bankFileDocId: bank } });
+    await prisma.raw.payrollRunLine.create({ data: { tenantId: t(), runId: run.id, employeeId: emp.id, branchId: b1, basic: 1, allowances: 0, overtimePay: 0, otherEarnings: 0, lateDeduction: 0, unpaidLeaveDeduction: 0, gross: 1, sscEmployee: 0, sscEmployer: 0, incomeTax: 0, advances: 0, net: 1, regularHours: 0, overtimeHours: 0, trace: {}, payslipDocId: slip } });
+    const cases: [U, number][] = [[await limited('finSame', 'FINANCE', T.legalEntityId), 200], [await limited('finElse', 'FINANCE', second), 404], [await limited('ownElse', 'OWNER', second), 404]];
+    for (const [u, status] of cases) for (const id of [slip, bank]) await http.get(`/documents/${id}`).set(auth(u.token)).expect(status);
+  });
+
+  it('a refused filing receipt leaves the tax return unfiled', async () => {
+    const secret = await upload(hr);
+    const period = await prisma.raw.taxPeriod.create({ data: { tenantId: t(), legalEntityId: T.legalEntityId, startDate: new Date('2026-01-01'), endDate: new Date('2026-01-31'), dueDate: new Date('2026-02-28'), label: 'Jan' } });
+    const ret = await prisma.raw.taxReturn.create({ data: { tenantId: t(), periodId: period.id, legalEntityId: T.legalEntityId, version: 1, status: 'APPROVED', outputBase: 0, outputTax: 0, inputBase: 0, inputTaxRecoverable: 0, inputTaxNonRecoverable: 0, netPayable: 0, findings: [], workingPapers: {}, generatedBy: T.ownerId, packageDocId: await upload(fin) } });
+    await http.post(`/tax/returns/${ret.id}/record-filing`).set(auth(fin.token)).send({ acknowledgmentRef: 'ACK-1234', evidenceDocumentId: secret }).expect(400);
+    expect((await prisma.raw.taxReturn.findFirstOrThrow({ where: { id: ret.id } })).status).toBe('APPROVED');
+  });
+
   it('nobody can attach a file they may not open', async () => {
     const secret = await upload(hr);
     const type = await prisma.raw.leaveType.findFirstOrThrow({ where: { tenantId: t() } });

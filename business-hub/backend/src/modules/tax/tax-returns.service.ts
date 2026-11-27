@@ -381,8 +381,8 @@ export class TaxReturnsService implements OnModuleInit {
     const r = await this.get(id);
     if (r.status !== 'APPROVED') throw new ConflictException(`Return must be approved before a filing can be recorded (it is ${r.status})`);
     if (!r.packageDocId) throw new ConflictException('Prepare the filing package first');
+    await this.docs.assertAttachable(user, [input.evidenceDocumentId]); // before anything changes
     await this.prisma.db.taxReturn.updateMany({ where: { id, status: 'APPROVED' }, data: { status: 'FILED', acknowledgmentRef: input.acknowledgmentRef, filedAt: input.filedAt ? dateOnly(input.filedAt) : ammanToday(), filedBy: user.id } });
-    await this.docs.assertAttachable(user, [input.evidenceDocumentId]);
     if (input.evidenceDocumentId) await this.prisma.db.evidenceDocument.updateMany({ where: { id: input.evidenceDocumentId }, data: { subjectType: 'TaxReturn', subjectId: id } });
     await this.fire(id, 'filing_recorded');
     await this.audit.record({ action: 'tax_return.filed', entityType: 'TaxReturn', entityId: id, after: { acknowledgmentRef: input.acknowledgmentRef, by: user.id } });

@@ -2,12 +2,15 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { isOwner, RequestUser } from '../../common/tenancy/tenant-context';
 
 export interface DocRef { id: string; createdBy: string | null; subjectType: string | null; subjectId: string | null }
-type Branch = string | null | undefined;
+// Where a record sits. A role limited to a branch or legal entity counts only for a record inside that limit.
+type Scope = { branchId?: string | null; legalEntityId?: string | null };
 
-// A company-wide role always counts; a branch-limited one only for a record of its branch. Delegations count.
-function holds(user: RequestUser, keys: string[], branches: Branch[] = []) {
-  const roles = [...user.roles, ...user.delegations.map((d) => ({ key: d.roleKey, branchId: d.branchId }))];
-  return roles.some((r) => (r.key === 'OWNER' || keys.includes(r.key)) && (r.branchId === null || branches.includes(r.branchId)));
+// Delegations count (they carry a branch limit only). A record with no known place needs an unlimited role.
+function holds(user: RequestUser, keys: string[], scopes: Scope[]) {
+  const roles = [...user.roles, ...user.delegations.map((d) => ({ key: d.roleKey, branchId: d.branchId, legalEntityId: null }))];
+  const places = scopes.length ? scopes : [{}];
+  return roles.some((r) => (r.key === 'OWNER' || keys.includes(r.key))
+    && places.some((p: Scope) => (r.branchId === null || r.branchId === p.branchId) && (r.legalEntityId === null || r.legalEntityId === p.legalEntityId)));
 }
 
 const HR = ['HR'];
@@ -22,7 +25,13 @@ export async function canReadDocument(prisma: PrismaService, user: RequestUser, 
   const db = prisma.db;
   const id = doc.id;
   const subject = (type: string) => (doc.subjectType === type ? doc.subjectId : null);
-  const staffBranch = async (employeeId: string) => (await db.employeeAssignment.findMany({ where: { employeeId, OR: [{ validTo: null }, { validTo: { gte: new Date() } }] } })).map((a) => a.branchId);
+  // Records of these branches, each with the branch's legal entity.
+  const atBranches = async (ids: (string | null | undefined)[]): Promise<Scope[]> => (await db.branch.findMany({ where: { id: { in: ids.filter((x): x is string => !!x) } } })).map((b) => ({ branchId: b.id, legalEntityId: b.legalEntityId }));
+  const ofEmployee = async (employeeId: string): Promise<Scope[]> => {
+    const legalEntityId = (await db.employee.findFirst({ where: { id: employeeId } }))?.legalEntityId;
+    const branches = (await db.employeeAssignment.findMany({ where: { employeeId, OR: [{ validTo: null }, { validTo: { gte: new Date() } }] } })).map((a) => a.branchId);
+    return branches.length ? branches.map((branchId) => ({ branchId, legalEntityId })) : [{ legalEntityId }];
+  };
 
   const rules: (() => Promise<boolean>)[] = [
     // checklist and training guides: any signed-in member of staff
@@ -37,7 +46,7 @@ export async function canReadDocument(prisma: PrismaService, user: RequestUser, 
         ...(await db.foodSafetyReading.findMany({ where: { docId: id } })),
         ...(await db.correctiveAction.findMany({ where: { evidenceDocIds: { array_contains: [id] } } })),
       ].map((r) => r.branchId);
-      return branches.length > 0 && holds(user, OPS, branches);
+      return branches.length > 0 && holds(user, OPS, await atBranches(branches));
     },
 
     // candidate documents and interview recordings
@@ -49,28 +58,37 @@ export async function canReadDocument(prisma: PrismaService, user: RequestUser, 
       ].filter((x): x is string => !!x);
       if (!applications.length) return false;
       const rows = await db.application.findMany({ where: { id: { in: applications } }, include: { vacancy: true } });
-      return holds(user, HR, rows.map((a) => a.vacancy.branchId));
+      return holds(user, HR, rows.map((a) => ({ branchId: a.vacancy.branchId, legalEntityId: a.vacancy.legalEntityId })));
     },
 
     // offer contracts, employment contracts, payslips, payroll and bank files
     async () => {
       const offers = await db.offer.findMany({ where: { OR: [{ contractDocId: id }, ...(subject('Offer') ? [{ id: subject('Offer')! }] : [])] } });
-      if (offers.length && holds(user, PAY, offers.map((o) => o.branchId))) return true;
-      const lines = await db.payrollRunLine.findMany({ where: { OR: [{ payslipDocId: id }, ...(subject('PayrollRunLine') ? [{ id: subject('PayrollRunLine')! }] : [])] } });
-      if (lines.length && holds(user, PAY, lines.map((l) => l.branchId))) return true;
-      const companyWide = subject('PayrollRun') || (await db.payrollRun.findFirst({ where: { bankFileDocId: id } })) || (await db.employmentContract.findFirst({ where: { documentId: id } }));
-      return !!companyWide && holds(user, PAY);
+      if (offers.length && holds(user, PAY, await atBranches(offers.map((o) => o.branchId)))) return true;
+      const lines = await db.payrollRunLine.findMany({ where: { OR: [{ payslipDocId: id }, ...(subject('PayrollRunLine') ? [{ id: subject('PayrollRunLine')! }] : [])] }, include: { run: true } });
+      if (lines.length && holds(user, PAY, lines.map((l) => ({ branchId: l.branchId, legalEntityId: l.run.legalEntityId })))) return true;
+      const runs = await db.payrollRun.findMany({ where: { OR: [{ bankFileDocId: id }, ...(subject('PayrollRun') ? [{ id: subject('PayrollRun')! }] : [])] } });
+      if ((runs.length || subject('PayrollRun')) && holds(user, PAY, runs.map((r) => ({ legalEntityId: r.legalEntityId })))) return true;
+      for (const c of await db.employmentContract.findMany({ where: { documentId: id } })) {
+        // company-wide roles only (no branch), within the employee's legal entity
+        const legalEntityId = (await db.employee.findFirst({ where: { id: c.employeeId } }))?.legalEntityId;
+        if (holds(user, PAY, [{ legalEntityId }])) return true;
+      }
+      return false;
     },
 
     // tax filing
-    async () => !!(subject('TaxReturn') || (await db.taxReturn.findFirst({ where: { packageDocId: id } }))) && holds(user, ['FINANCE']),
+    async () => {
+      const returns = await db.taxReturn.findMany({ where: { OR: [{ packageDocId: id }, ...(subject('TaxReturn') ? [{ id: subject('TaxReturn')! }] : [])] } });
+      return (returns.length > 0 || !!subject('TaxReturn')) && holds(user, ['FINANCE'], returns.map((r) => ({ legalEntityId: r.legalEntityId })));
+    },
 
     // leave certificates: HR, the employee and their line manager
     async () => {
       for (const leave of await db.leaveRequest.findMany({ where: { certificateDocId: id } })) {
         const employee = await db.employee.findFirst({ where: { id: leave.employeeId } });
         if (!employee) continue;
-        if (employee.userId === user.id || holds(user, HR, await staffBranch(employee.id))) return true;
+        if (employee.userId === user.id || holds(user, HR, await ofEmployee(employee.id))) return true;
         if (employee.managerId && (await db.employee.findFirst({ where: { id: employee.managerId } }))?.userId === user.id) return true;
       }
       return false;
@@ -79,7 +97,7 @@ export async function canReadDocument(prisma: PrismaService, user: RequestUser, 
     // discipline evidence
     async () => {
       for (const c of await db.disciplinaryCase.findMany({ where: { evidenceDocIds: { array_contains: [id] } } })) {
-        if (holds(user, HR, await staffBranch(c.employeeId))) return true;
+        if (holds(user, HR, await ofEmployee(c.employeeId))) return true;
       }
       return false;
     },
@@ -87,7 +105,7 @@ export async function canReadDocument(prisma: PrismaService, user: RequestUser, 
     // supplier invoices and delivery evidence
     async () => {
       const invoices = await db.supplierInvoice.findMany({ where: { OR: [{ evidenceDocumentId: id }, ...(subject('SupplierInvoice') ? [{ id: subject('SupplierInvoice')! }] : [])] }, include: { receipts: true, purchaseOrder: true } });
-      return invoices.length > 0 && holds(user, BUYING, invoices.flatMap((i) => [...i.receipts.map((r) => r.branchId), i.purchaseOrder?.branchId]));
+      return invoices.length > 0 && holds(user, BUYING, await atBranches(invoices.flatMap((i) => [...i.receipts.map((r) => r.branchId), i.purchaseOrder?.branchId])));
     },
   ];
 

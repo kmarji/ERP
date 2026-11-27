@@ -7,6 +7,10 @@ import PizZip from 'pizzip';
 // fields are allowed by name only.
 const SAFE_FIELDS = new Set(['PAGE', 'NUMPAGES', 'SECTION', 'SECTIONPAGES', 'DATE', 'TIME', 'TOC', 'PAGEREF', 'REF', 'NOTEREF', 'STYLEREF', 'SEQ', 'HYPERLINK', 'FORMTEXT', 'FORMCHECKBOX', 'FORMDROPDOWN']);
 const ADDRESS = /^\s*([a-z][a-z0-9+.-]*:|\\\\)/i; // http:, file:, \\server
+const WEB_LINK = /^\s*(https?|mailto|tel):/i;
+const LINK_ELEMENTS = new Set(['hyperlink', 'hlinkClick', 'hlinkHover']);
+// Attributes that point at a relationship: the relationships namespaces (transitional and strict) and VML's o:relid.
+const RELATIONSHIP_NS = /\/officeDocument(\/2006)?\/relationships$/;
 
 const refuse = (why: string): never => {
   throw new BadRequestException(`This is not allowed in a template: ${why}. Nothing may reach outside the document (linked pictures, included files, attached templates).`);
@@ -38,7 +42,7 @@ function parts(zip: PizZip) {
 }
 
 const local = (n: any): string => n.localName ?? n.nodeName.split(':').pop();
-const attributes = (el: any) => (Array.from(el.attributes) as any[]).map((a) => ({ name: local(a), value: String(a.value) }));
+const attributes = (el: any) => (Array.from(el.attributes) as any[]).map((a) => ({ name: local(a), ns: String(a.namespaceURI ?? ''), value: String(a.value) }));
 const attr = (el: any, name: string) => attributes(el).find((a) => a.name === name)?.value ?? '';
 
 function checkField(instruction: string) {
@@ -78,9 +82,9 @@ export function checkSafety(zip: PizZip): void {
       const target = attr(el, 'Target');
       const link = attr(el, 'Type').endsWith('/hyperlink');
       const external = attr(el, 'TargetMode').trim().toLowerCase() === 'external';
-      if (!(external && link) && (external || ADDRESS.test(target))) refuse(`a link to "${target.slice(0, 80)}"`);
+      if (external ? !(link && WEB_LINK.test(target)) : ADDRESS.test(target)) refuse(`a link to "${target.slice(0, 80)}"`);
       if (external) {
-        const owner = part.name.replace(/_rels\/([^/]*)\.rels$/i, '$1');
+        const owner = part.name.replace(/_rels\/([^/]*)\.rels$/i, '$1').toLowerCase();
         links.set(owner, (links.get(owner) ?? new Set()).add(attr(el, 'Id')));
       }
     }
@@ -90,7 +94,9 @@ export function checkSafety(zip: PizZip): void {
     for (const el of part.elements) {
       for (const a of attributes(el)) {
         if ((a.name === 'src' || a.name === 'href') && ADDRESS.test(a.value)) refuse(`a direct address "${a.value.slice(0, 80)}"`);
-        if ((a.name === 'embed' || a.name === 'link') && links.get(part.name)?.has(a.value)) refuse('a web link used as content');
+        // A web link may only be clicked: any other element pointing at it would load it as content.
+        const reference = RELATIONSHIP_NS.test(a.ns) || a.name === 'relid';
+        if (reference && !LINK_ELEMENTS.has(local(el)) && links.get(part.name.toLowerCase())?.has(a.value)) refuse('a web link used as content');
       }
     }
   }

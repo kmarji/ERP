@@ -20,7 +20,19 @@ describe('checkTemplate', () => {
   it('accepts ordinary documents: page numbers, a split harmless field and a web link', () => {
     expect(() => checkTemplate(docx(field(' PA', 'GE ') + `<w:fldSimple w:instr=" NUMPAGES "/>` + `<w:hyperlink r:id="h1">${run('<w:t>site</w:t>')}</w:hyperlink>`, { 'word/_rels/document.xml.rels': rel('h1', 'hyperlink', URL) }))).not.toThrow();
   });
+  const linkRels = { 'word/_rels/document.xml.rels': rel('h1', 'hyperlink', URL) };
+  const VML = 'xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"';
+  it('accepts a link on a picture and an email link', () => {
+    expect(() => checkTemplate(docx(run('<w:drawing><a:hlinkClick xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" r:id="h1"/></w:drawing>'), linkRels))).not.toThrow();
+    expect(() => checkTemplate(docx('<w:hyperlink r:id="h1"/>', { 'word/_rels/document.xml.rels': rel('h1', 'hyperlink', 'mailto:hr@example.test') }))).not.toThrow();
+  });
   it.each([
+    ['a web link reused by a VML picture', docx(run(`<w:pict><v:imagedata ${VML} r:id="h1"/></w:pict>`), linkRels)],
+    ['a web link reused through o:relid', docx(run(`<w:pict><v:imagedata ${VML} o:relid="h1"/></w:pict>`), linkRels)],
+    ['a web link reused under another prefix', docx(run('<x:pic xmlns:x="x" xmlns:q="http://schemas.openxmlformats.org/officeDocument/2006/relationships" q:pict="h1"/>'), linkRels)],
+    ['a web link reused with the strict namespace', docx(run('<x:pic xmlns:x="x" xmlns:q="http://purl.oclc.org/ooxml/officeDocument/relationships" q:id="h1"/>'), linkRels)],
+    ['a rels file named in another case', docx(run('<x:pic xmlns:x="x" r:id="h1"/>'), { 'word/_rels/Document.xml.rels': rel('h1', 'hyperlink', URL) })],
+    ['a link to a server file', docx('<w:hyperlink r:id="h1"/>', { 'word/_rels/document.xml.rels': rel('h1', 'hyperlink', 'file:///etc/passwd') })],
     ['a field split across runs', docx(field(' INCLUDE', 'PICTURE "http://example.test/a" '))],
     ['a lower-case field', docx(field(' includetext "file:///etc/passwd" '))],
     ['a simple field', docx(`<w:fldSimple w:instr=" INCLUDETEXT &quot;file:///etc/passwd&quot; "/>`)],
